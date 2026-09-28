@@ -67,6 +67,7 @@ import html as htmlmod
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import socket
@@ -221,6 +222,91 @@ def http_get(url: str, timeout: int = REQUEST_TIMEOUT, headers: Optional[dict] =
     return raw.decode("utf-8", errors="replace")
 
 
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_MAX_RETRY_SLEEP = 60.0
+
+
+def _http_get_with_retry(
+    url: str,
+    timeout: int = REQUEST_TIMEOUT,
+    headers: Optional[dict] = None,
+    max_retries: int = 3,
+) -> str:
+    delay = 1.0
+    for attempt in range(max_retries + 1):
+        try:
+            return http_get(url, timeout=timeout, headers=headers)
+        except BackendError as exc:
+            msg = str(exc)
+            # Extract HTTP status code if present
+            status: Optional[int] = None
+            retry_after: Optional[float] = None
+            if msg.startswith("HTTP "):
+                try:
+                    status = int(msg.split()[1])
+                except (IndexError, ValueError):
+                    pass
+            if status not in _RETRY_STATUSES and status is not None:
+                raise
+            if attempt >= max_retries:
+                raise
+            # Try to honour Retry-After by re-issuing the raw request
+            try:
+                hdrs = {"User-Agent": USER_AGENT}
+                if headers:
+                    hdrs.update(headers)
+                req = urllib.request.Request(url, headers=hdrs)
+                urllib.request.urlopen(req, timeout=timeout)  # nosec B310
+            except urllib.error.HTTPError as raw_exc:
+                ra = raw_exc.headers.get("Retry-After") if raw_exc.headers else None
+                if ra:
+                    try:
+                        retry_after = min(float(ra), _MAX_RETRY_SLEEP)
+                    except ValueError:
+                        pass
+            except Exception:
+                pass
+            sleep_time = retry_after if retry_after is not None else min(
+                delay * (2 ** attempt) + random.uniform(0, 1), _MAX_RETRY_SLEEP
+            )
+            time.sleep(sleep_time)
+    raise BackendError("max retries exceeded")  # unreachable
+
+
+def _extract_json_object(text: str) -> dict:
+    """Extract the first balanced {...} JSON object from *text*.
+
+    Uses brace-depth counting so nested objects/arrays inside string values
+    are handled correctly, unlike a greedy ``re.search(r'\\{.*\\}', ..., re.S)``.
+    Raises ValueError if no valid object is found.
+    """
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("no '{' found")
+    depth = 0
+    in_str = False
+    escape = False
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_str:
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:i + 1])
+    raise ValueError("unbalanced braces — no complete JSON object found")
+
+
 # --------------------------------------------------------------------------
 # Backends
 # --------------------------------------------------------------------------
@@ -229,7 +315,7 @@ def backend_bing_rss(query: str, limit: int) -> list[Result]:
     url = "https://www.bing.com/search?" + urllib.parse.urlencode(
         {"q": query, "format": "rss", "count": max(limit, 10)}
     )
-    page = http_get(url)
+    page = _http_get_with_retry(url)
     head = page[:4096].upper()
     if "<!DOCTYPE" in head or "<!ENTITY" in head:
         # un flux RSS n'a jamais besoin de DTD : on refuse toute déclaration d'entité
@@ -258,12 +344,12 @@ _MARG_CARD_RE = re.compile(r'<section[^>]*class="card search-result"[^>]*>(.*?)<
 
 def backend_marginalia(query: str, limit: int) -> list[Result]:
     url = _MARG_BASE + "/search?" + urllib.parse.urlencode({"query": query})
-    page = http_get(url)
+    page = _http_get_with_retry(url)
     throttle = _MARG_THROTTLE_RE.search(page)
     if throttle:
         wait = min(int(throttle.group(1)), 8)
         time.sleep(wait + 0.5)
-        page = http_get(_MARG_BASE + htmlmod.unescape(throttle.group(2)))
+        page = _http_get_with_retry(_MARG_BASE + htmlmod.unescape(throttle.group(2)))
         if _MARG_THROTTLE_RE.search(page):
             raise BackendError("interstitiel anti-bot persistant")
     results: list[Result] = []
@@ -297,7 +383,7 @@ def _decode_yahoo_redirect(raw_url: str) -> str:
 
 def backend_yahoo(query: str, limit: int) -> list[Result]:
     url = "https://search.yahoo.com/search?" + urllib.parse.urlencode({"p": query})
-    page = http_get(url)
+    page = _http_get_with_retry(url)
     chunks = re.split(r'(?=<div class="dd(?: \w+)* algo algo-sr relsrch Sr")', page)
     results: list[Result] = []
     for chunk in chunks[1:]:
@@ -338,6 +424,8 @@ class BackendPool:
         self._lock = threading.Lock()
 
     def _order(self, precise: bool) -> list[tuple[str, Callable[[str, int], list[Result]]]]:
+        if not self._backends:
+            return []
         if precise:
             rotated = list(self._backends)   # ordre déclaré : index large d'abord (précision)
         else:
@@ -398,6 +486,25 @@ def safe_http_url(url: str) -> Optional[str]:
     if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
         return None
     return url.strip()
+
+
+_TRACKING_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fbclid", "gclid", "gclsrc", "dclid", "msclkid", "twclid",
+    "mc_cid", "mc_eid", "yclid", "_ga", "_gl",
+})
+
+
+def strip_tracking_params(url: str) -> str:
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.query:
+        return url
+    cleaned = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+                if k.lower() not in _TRACKING_PARAMS]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(cleaned)))
 
 
 def domain_of(url: str) -> str:
@@ -760,8 +867,7 @@ def ollama_translate(host: str, model: str, lang_name: str, texts: list[str]) ->
         with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:  # http(s) validé  # nosec B310
             payload = json.loads(_read_limited(resp).decode("utf-8"))
         raw = payload.get("response", "")
-        m = re.search(r"\{.*\}", raw, re.S)
-        data = json.loads(m.group(0) if m else raw)
+        data = _extract_json_object(raw)
         out = data.get("translations")
     except (urllib.error.URLError, OSError, ValueError, AttributeError) as exc:
         raise BackendError(f"ollama translate: {exc}") from exc
@@ -827,8 +933,7 @@ class OllamaExpander:
             with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:  # http(s) validé  # nosec B310
                 payload = json.loads(_read_limited(resp).decode("utf-8"))
             raw = payload.get("response", "")
-            m = re.search(r"\{.*\}", raw, re.S)
-            data = json.loads(m.group(0) if m else raw)
+            data = _extract_json_object(raw)
         except (urllib.error.URLError, OSError, ValueError, AttributeError) as exc:
             raise BackendError(f"ollama: {exc}") from exc
 
@@ -1089,9 +1194,11 @@ class Session:
         if not self.cfg.html_out:
             return
         try:
-            tmp = self.cfg.html_out + ".tmp"
+            tmp = self.cfg.html_out + ".tmp." + os.urandom(3).hex()
             with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(render_html(self.snapshot(), live=False))
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp, self.cfg.html_out)
         except OSError as exc:
             log.warning("snapshot HTML non écrit (%s): %s", self.cfg.html_out, exc)
@@ -1241,6 +1348,7 @@ class Session:
                 wants_definition = any(w in topic.query.lower() for w in ("definition", "définition", "meaning", "what is", "qu'est"))
                 per_domain: Counter[str] = Counter()
                 for r in results:
+                    r.url = strip_tracking_params(r.url)
                     if not safe_http_url(r.url) or r.url in self.seen_urls:
                         continue
                     dom = domain_of(r.url)
