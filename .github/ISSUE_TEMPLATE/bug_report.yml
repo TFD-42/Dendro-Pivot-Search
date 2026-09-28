@@ -1,0 +1,100 @@
+name: Bug report
+description: Report a reproducible defect in DendroPivot
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+        **Security issues must not be reported here.** Follow [SECURITY.md](https://github.com/TFD-42/dendropivot-search/blob/main/SECURITY.md) instead.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I reproduced the problem with the latest release or `main`.
+          required: true
+        - label: I removed personal data (queries, IPs, hostnames, tokens) from the logs below.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: DendroPivot version
+      description: Release tag or commit SHA.
+      placeholder: v1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Execution mode
+      multiple: true
+      options:
+        - Interactive terminal (TUI)
+        - JSON (--json)
+        - HTML snapshot (--html-out)
+        - Local web view (--web / --web-only)
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend involved
+      multiple: true
+      options:
+        - bing-rss
+        - marginalia
+        - yahoo
+        - Ollama expansion
+        - Ollama translation
+        - Not backend-related
+        - Unknown
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Android (Termux)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Output of `python3 --version`.
+      placeholder: Python 3.12.4
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command
+      render: shell
+      placeholder: python3 websearch.py -q "example" --rounds 1 --no-ollama --debug
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `--debug --log-file websearch.log` and paste the relevant lines.
+      render: text

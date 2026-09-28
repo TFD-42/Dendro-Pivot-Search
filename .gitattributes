@@ -1,0 +1,18 @@
+# Normalize line endings in the repository; keep LF in the working tree.
+* text=auto eol=lf
+
+*.py    text diff=python
+*.md    text diff=markdown
+*.yml   text
+*.yaml  text
+*.cff   text
+*.txt   text
+
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.zip   binary
+
+# Exclude repository metadata from `git archive` source tarballs.
+.gitattributes  export-ignore
+.github/        export-ignore

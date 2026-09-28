@@ -1,0 +1,42 @@
+name: Search backend breakage
+description: A backend returns no results, is blocked, or its HTML changed
+title: "[Backend]: "
+labels: ["backend", "bug", "triage"]
+body:
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - bing-rss
+        - marginalia
+        - yahoo
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DendroPivot version
+      placeholder: v1.0.0
+    validations:
+      required: true
+  - type: input
+    id: first_seen
+    attributes:
+      label: First observed (UTC date)
+      placeholder: 2026-09-28
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: Symptom
+      description: Paste the `backend <name> échec` / cooldown lines from `--debug` output.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: region
+    attributes:
+      label: Network context
+      description: Country or region, VPN/proxy usage, IPv4/IPv6. Do not paste your IP address.

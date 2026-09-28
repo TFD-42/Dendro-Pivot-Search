@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/TFD-42/dendropivot-search/security/advisories/new
+    about: Report vulnerabilities privately. Never open a public issue for security problems.
+  - name: Questions and usage help
+    url: https://github.com/TFD-42/dendropivot-search/blob/main/SUPPORT.md
+    about: Where to ask questions before opening an issue.

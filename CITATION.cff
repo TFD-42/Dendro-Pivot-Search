@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "DendroPivot"
+abstract: "Innovative methodology to learn deeper by pivoting from an initial query: a two-column, continuously enriching web search explorer for the terminal and a local web view, with multi-backend fallback and optional Ollama query expansion. Python standard library only."
+type: software
+authors:
+  - alias: "TFD-42"
+version: "1.0.0"
+date-released: "2026-09-28"
+license: MIT
+repository-code: "https://github.com/TFD-42/dendropivot-search"
+keywords:
+  - knowledge tree
+  - learning
+  - research tool
+  - web search
+  - search engine
+  - cli
+  - tui
+  - ollama
+  - llm
+  - query expansion
+  - termux
+  - python
