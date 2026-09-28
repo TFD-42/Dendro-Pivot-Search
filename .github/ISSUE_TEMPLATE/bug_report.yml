@@ -24,7 +24,7 @@ body:
     attributes:
       label: DendroPivot version
       description: Release tag or commit SHA.
-      placeholder: v1.0.0
+      placeholder: v1.1.0
     validations:
       required: true
   - type: dropdown
@@ -33,10 +33,12 @@ body:
       label: Execution mode
       multiple: true
       options:
-        - Interactive terminal (TUI)
+        - Launcher (run.sh / run.bat / launcher.py)
+        - Live HTML view (default)
+        - HTML snapshot (no terminal / --html-out)
+        - Terminal UI (--tui)
         - JSON (--json)
-        - HTML snapshot (--html-out)
-        - Local web view (--web / --web-only)
+        - Text (--text)
     validations:
       required: true
   - type: dropdown
@@ -77,7 +79,7 @@ body:
     attributes:
       label: Exact command
       render: shell
-      placeholder: python3 websearch.py -q "example" --rounds 1 --no-ollama --debug
+      placeholder: python3 websearch.py -q "example" --no-ollama --debug
     validations:
       required: true
   - type: textarea

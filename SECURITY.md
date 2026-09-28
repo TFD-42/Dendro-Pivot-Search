@@ -16,7 +16,7 @@ Report it privately through GitHub: [**Report a vulnerability**](https://github.
 Include:
 
 - affected version or commit SHA;
-- execution mode (TUI, `--json`, `--html-out`, `--web`, `--web-only`);
+- execution mode (launcher, default HTML view, HTML snapshot, `--tui`, `--json`, `--text`);
 - web server configuration (`--web-host`, port, proxy or tunnel in front);
 - operating system and Python version;
 - minimal reproduction steps or proof of concept;
@@ -37,6 +37,8 @@ Reporters are credited in the advisory and the changelog unless they ask otherwi
 DendroPivot (`websearch.py`) is a **local, single-user** tool.
 
 - The built-in HTTP server binds to loopback only (`127.0.0.1`, `localhost`, `::1`) and has **no authentication**. Non-local `--web-host` values are rejected by design.
+- Requests must carry a loopback `Host` header with the exact port (DNS rebinding) and POST requests must be JSON with a same-origin `Origin` when present (CSRF).
+- The launcher runs only fixed, displayed Ollama installation commands after explicit confirmation (or `--install --yes`).
 - Anyone able to reach the port can drive the session. Use an SSH tunnel for remote access.
 - A public reverse proxy in front of the server must add authentication, access control, HTTPS and CSRF protection.
 - Search results come from third-party pages and are treated as untrusted: URLs are restricted to HTTP(S) and all text is HTML-escaped.

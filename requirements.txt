@@ -1,2 +1,2 @@
-# DendroPivot (websearch.py) v1 utilise uniquement la bibliothèque standard Python.
+# DendroPivot (websearch.py, launcher.py) utilise uniquement la bibliothèque standard Python.
 # Ollama est un service optionnel installé séparément.

@@ -5,7 +5,7 @@ abstract: "Innovative methodology to learn deeper by pivoting from an initial qu
 type: software
 authors:
   - alias: "TFD-42"
-version: "1.0.0"
+version: "1.1.0"
 date-released: "2026-09-28"
 license: MIT
 repository-code: "https://github.com/TFD-42/dendropivot-search"

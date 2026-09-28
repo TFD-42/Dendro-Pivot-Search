@@ -17,7 +17,7 @@ body:
     id: version
     attributes:
       label: DendroPivot version
-      placeholder: v1.0.0
+      placeholder: v1.1.0
     validations:
       required: true
   - type: input

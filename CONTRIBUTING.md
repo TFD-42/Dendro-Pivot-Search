@@ -7,7 +7,7 @@ Thank you for considering a contribution. This document describes how to propose
 - Be respectful: all participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 - Security problems go through [SECURITY.md](SECURITY.md), never through public issues.
 - **Standard library only.** DendroPivot has no third-party runtime dependency. A pull request that adds one must justify why the standard library cannot do the job.
-- Keep the single-file layout (`websearch.py`) unless a refactor is discussed in an issue first.
+- Keep the layout: `websearch.py` (application) and `launcher.py` (setup menu), each a single stdlib-only file, unless a refactor is discussed in an issue first.
 
 ## Development setup
 
@@ -15,7 +15,7 @@ Thank you for considering a contribution. This document describes how to propose
 git clone https://github.com/TFD-42/dendropivot-search.git
 cd dendropivot-search
 python3 --version          # 3.10 or newer
-python3 -m py_compile websearch.py
+python3 -m py_compile websearch.py launcher.py
 python3 -m unittest discover -s tests -v
 ```
 
@@ -28,7 +28,7 @@ No virtual environment is required. If you use one, keep it out of the repositor
    `feat/<short-name>`, `fix/<short-name>`, `docs/<short-name>` or `chore/<short-name>`.
 3. Make focused commits using [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
    `feat: add Mojeek backend`, `fix(web): reject oversized POST bodies`.
-4. Add or update tests. Tests must run **offline**: mock `http_get` or pass fake backends to `BackendPool`.
+4. Add or update tests. Tests must run **offline**: mock `http_get`, pass fake backends to `BackendPool`, and inject `opener` / mocks for Ollama calls in the launcher. Set `TOK_CONFIG_DIR` to a temporary directory in launcher tests.
 5. Update `README.md`, `README.fr.md` and the `Unreleased` section of `CHANGELOG.md` for user-facing changes.
 6. Open a pull request and complete the checklist in the template.
 

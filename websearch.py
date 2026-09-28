@@ -59,6 +59,9 @@ p = pause/reprise ; l = journal ; q = nouvelle recherche ; Ctrl-C = quitter.
 
 from __future__ import annotations
 
+__version__ = "1.1.0"
+APP_NAME = "DendroPivot"
+
 import argparse
 import html as htmlmod
 import json
@@ -66,14 +69,15 @@ import logging
 import os
 import re
 import shutil
-import subprocess
+import socket
+import subprocess  # usage limité à open_url (arguments fixes)  # nosec B404
 import sys
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # DTD/ENTITY rejetés avant parsing  # nosec B405
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import Counter
 from dataclasses import dataclass, field
@@ -101,6 +105,7 @@ NOISE_DOMAINS = {"merriam-webster.com", "dictionary.cambridge.org", "dictionary.
                  "thefreedictionary.com", "wiktionary.org", "en.wiktionary.org", "vocabulary.com",
                  "collinsdictionary.com", "askdifference.com", "twominenglish.com"}
 OLLAMA_TIMEOUT = 40
+DEFAULT_WEB_PORT = 8765
 MAX_HTTP_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_POST_BODY_BYTES = 64 * 1024
 MAX_SEED_LENGTH = 200
@@ -116,13 +121,14 @@ class Config:
     request_delay: float = DEFAULT_REQUEST_DELAY
     rounds: int = 0                    # 0 = illimité (mode interactif)
     use_ollama: bool = True
-    ollama_host: str = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-    ollama_model: str = os.environ.get("OLLAMA_MODEL", "")
+    ollama_host: str = field(default_factory=lambda: os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
+    ollama_model: str = field(default_factory=lambda: os.environ.get("OLLAMA_MODEL", ""))
     color: bool = True
     debug: bool = False
     web_port: int = 0                  # 0 = serveur web désactivé
     web_host: str = "127.0.0.1"
     html_out: str = ""                 # snapshot HTML statique réécrit à chaque round
+    lang: str = ""                     # langue de recherche/interface ("" = détection automatique)
 
 
 # --------------------------------------------------------------------------
@@ -201,7 +207,7 @@ def http_get(url: str, timeout: int = REQUEST_TIMEOUT, headers: Optional[dict] =
         hdrs.update(headers)
     req = urllib.request.Request(url, headers=hdrs)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # http(s) validé  # nosec B310
             status = resp.status
             raw = _read_limited(resp)
     except urllib.error.HTTPError as exc:
@@ -224,8 +230,12 @@ def backend_bing_rss(query: str, limit: int) -> list[Result]:
         {"q": query, "format": "rss", "count": max(limit, 10)}
     )
     page = http_get(url)
+    head = page[:4096].upper()
+    if "<!DOCTYPE" in head or "<!ENTITY" in head:
+        # un flux RSS n'a jamais besoin de DTD : on refuse toute déclaration d'entité
+        raise BackendError("RSS refusé (DTD/ENTITY présent)")
     try:
-        root = ET.fromstring(page.encode("utf-8"))
+        root = ET.fromstring(page.encode("utf-8"))  # DTD/ENTITY rejetés ci-dessus  # nosec B314
     except ET.ParseError as exc:
         raise BackendError(f"RSS illisible ({exc})") from exc
     results: list[Result] = []
@@ -458,7 +468,7 @@ class KeywordStats:
         for t in set(toks):
             self.weights[t] += w_term
             self.term_topics.setdefault(t, set()).add(topic_id)
-        for a, b in zip(toks, toks[1:]):
+        for a, b in zip(toks, toks[1:], strict=False):
             if a == b:
                 continue
             bg = f"{a} {b}"
@@ -555,8 +565,11 @@ _RELATED_TEMPLATES = {
 class HeuristicExpander:
     name = "heuristic"
 
+    def __init__(self, lang: str = ""):
+        self.lang = lang if lang in _TEMPLATES else ""
+
     def expand(self, seed: str, stats: KeywordStats, round_no: int, used: set[str]) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-        lang = detect_lang(seed)
+        lang = self.lang or detect_lang(seed)
         col1: list[tuple[str, str]] = []
         col2: list[tuple[str, str]] = []
         core = stats.core_terms(4)               # champ propre de la graine (df >= 2)
@@ -617,6 +630,9 @@ def method_hint(method: str, lang: str) -> str:
 
 LANGUAGES = {"fr": "Français", "en": "English", "es": "Español",
              "it": "Italiano", "zh": "中文", "ru": "Русский"}
+LANGUAGE_NAMES_EN = {"fr": "French", "en": "English", "es": "Spanish",
+                     "it": "Italian", "zh": "Chinese", "ru": "Russian"}
+UI_SOURCE_LANG = "fr"  # langue des libellés UI_STRINGS / METHOD_LABELS
 # Libellés de l'interface web (source = français). Traduits par le même chemin LLM que les
 # données, puis substitués côté navigateur. Les URLs, noms de backend et domaines ne sont
 # jamais traduits : ce sont des identifiants. La page distante ouverte dans le navigateur
@@ -648,6 +664,47 @@ METHOD_LABELS = {
     "lexical": "lexical", "cooccurrence": "co-occurrence", "template": "gabarit", "ollama": "ollama",
 }
 
+# Traduction anglaise intégrée des libellés : l'interface est utilisable en anglais sans Ollama.
+# Clés = clés de UI_STRINGS / METHOD_LABELS ; les gabarits gardent les mêmes {paramètres}.
+UI_STRINGS_EN = {
+    "btn_round": "run round now", "btn_pause": "pause", "btn_resume": "resume",
+    "ph_newseed": "new seed…", "btn_tree": "tree", "btn_history": "full history",
+    "btn_expand": "expand all", "btn_collapse": "collapse all",
+    "lbl_history": "history:", "btn_back": "back", "btn_fwd": "forward",
+    "hint_actions": "click card = expand/collapse · click leaf = open + mark as read · Shift+click = pivot",
+    "lbl_translate": "translation (LLM):", "opt_original": "Original",
+    "lbl_lexical": "lexical field:", "lbl_viewed": "read:",
+    "lbl_round": "round", "lbl_time": "time", "lbl_results": "results",
+    "lbl_method": "method", "lbl_query": "query", "lbl_column": "column",
+    "col_focus": "focus", "col_adjacent": "adjacent",
+    "paused": "PAUSED", "next_round": "next round in {s}s",
+    "live": "live", "static": "static snapshot", "unreachable": "server unreachable",
+    "no_rounds": "(no round finished yet)", "none": "none",
+    "tr_running": "translating to {lang}…", "tr_done": "translated: {lang}",
+    "st_start": "starting", "st_plan": "round {r}: planning",
+    "st_search": "round {r}: {i}/{n} “{q}”", "st_done": "round {r} done: +{added} results",
+    "st_limit": "{r} round(s) done (limit reached)",
+    "st_hist": "history {i}/{n}: “{seed}” (round {r})",
+}
+METHOD_LABELS_EN = {
+    "seed": "seed", "definition": "definition", "practical": "practical",
+    "comparison": "comparison", "recent": "recent", "technical": "technical",
+    "lexical": "lexical", "cooccurrence": "co-occurrence", "template": "template", "ollama": "ollama",
+}
+BUILTIN_UI_TRANSLATIONS = {"en": (UI_STRINGS_EN, METHOD_LABELS_EN)}
+
+
+def builtin_translation_cache(lang: str) -> dict[str, str]:
+    """Cache source->cible pour les libellés d'interface, sans LLM. Vide si langue non intégrée."""
+    pair = BUILTIN_UI_TRANSLATIONS.get(lang)
+    if not pair:
+        return {}
+    ui, methods = pair
+    cache = {UI_STRINGS[k]: v for k, v in ui.items() if k in UI_STRINGS}
+    cache.update({METHOD_LABELS[k]: v for k, v in methods.items() if k in METHOD_LABELS})
+    return cache
+
+
 TRANSLATE_CHUNK = 20  # textes par appel Ollama : garde le prompt/la réponse JSON gérables
 
 
@@ -668,7 +725,7 @@ def probe_ollama(host: str, model_hint: str = "") -> Optional[str]:
     --no-ollama, qui ne désactive que l'expansion, pas la traduction à la demande)."""
     try:
         req = urllib.request.Request(host.rstrip("/") + "/api/tags", headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:  # http(s) validé  # nosec B310
             data = json.loads(_read_limited(resp).decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError):
         return None
@@ -700,7 +757,7 @@ def ollama_translate(host: str, model: str, lang_name: str, texts: list[str]) ->
     req = urllib.request.Request(host.rstrip("/") + "/api/generate", data=body,
                                  headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:  # http(s) validé  # nosec B310
             payload = json.loads(_read_limited(resp).decode("utf-8"))
         raw = payload.get("response", "")
         m = re.search(r"\{.*\}", raw, re.S)
@@ -719,15 +776,16 @@ class OllamaExpander:
 
     name = "ollama"
 
-    def __init__(self, host: str, model: str):
+    def __init__(self, host: str, model: str, lang: str = ""):
         self.host = host.rstrip("/")
         self.model = model
+        self.lang = lang
         self.available = False
 
     def probe(self) -> bool:
         try:
             req = urllib.request.Request(self.host + "/api/tags", headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=3) as resp:  # http(s) validé  # nosec B310
                 data = json.loads(_read_limited(resp).decode("utf-8"))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             log.debug("ollama injoignable: %s", exc)
@@ -743,7 +801,10 @@ class OllamaExpander:
         return True
 
     def expand(self, seed: str, stats: KeywordStats, round_no: int, used: set[str]) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-        lang = "French" if detect_lang(seed) == "fr" else "English"
+        if self.lang in LANGUAGE_NAMES_EN:
+            lang = LANGUAGE_NAMES_EN[self.lang]
+        else:
+            lang = "French" if detect_lang(seed) == "fr" else "English"
         prompt = (
             f"You generate web search queries. Language: {lang}.\n"
             f"Seed query: {seed!r}\n"
@@ -763,7 +824,7 @@ class OllamaExpander:
         req = urllib.request.Request(self.host + "/api/generate", data=body,
                                      headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT) as resp:  # http(s) validé  # nosec B310
                 payload = json.loads(_read_limited(resp).decode("utf-8"))
             raw = payload.get("response", "")
             m = re.search(r"\{.*\}", raw, re.S)
@@ -794,10 +855,10 @@ class Planner:
     """Combine Ollama (si dispo) et heuristique ; complète toujours à 5+5."""
 
     def __init__(self, cfg: Config):
-        self.heuristic = HeuristicExpander()
+        self.heuristic = HeuristicExpander(cfg.lang)
         self.ollama: Optional[OllamaExpander] = None
         if cfg.use_ollama:
-            cand = OllamaExpander(cfg.ollama_host, cfg.ollama_model)
+            cand = OllamaExpander(cfg.ollama_host, cfg.ollama_model, cfg.lang)
             if cand.probe():
                 self.ollama = cand
                 log.info("ollama actif (%s, modèle %s)", cand.host, cand.model)
@@ -855,6 +916,7 @@ class Session:
         self.translations: dict[str, dict[str, str]] = {}
         self.translate_lang = ""
         self.translate_status = ""
+        self._llm_translation_warned = False
         self.log: list[str] = []
         self.reset(seed)
 
@@ -1016,7 +1078,8 @@ class Session:
                 "history": self.history_view(), "cursor": self.cursor,
                 "round_times": {str(r): time.strftime("%H:%M:%S", time.localtime(ts))
                                 for r, ts in self.round_started_at.items()},
-                "languages": LANGUAGES, "translate_lang": lang, "translate_status": self.translate_status,
+                "languages": LANGUAGES, "translate_lang": lang,
+                "html_lang": lang or UI_SOURCE_LANG, "app": APP_NAME, "app_version": __version__, "translate_status": self.translate_status,
                 "status_key": self.status_key, "status_params": self.status_params,
                 "ui": {k: tx(v) for k, v in UI_STRINGS.items()},
                 "methods": {k: tx(v) for k, v in METHOD_LABELS.items()},
@@ -1070,7 +1133,9 @@ class Session:
         try:
             self.translate_batch(lang, self.collect_translatable_texts())
         except BackendError as exc:
-            self.note(f"traduction du nouveau contenu échouée: {exc}")
+            if not self._llm_translation_warned:
+                self._llm_translation_warned = True
+                self.note(f"traduction LLM indisponible, libellés intégrés/originaux conservés: {exc}")
 
     def translate_batch(self, lang: str, texts: list[str]) -> None:
         """Traduit les textes pas encore en cache pour `lang`, par lots de TRANSLATE_CHUNK.
@@ -1090,9 +1155,30 @@ class Session:
             translated = ollama_translate(host, model, lang_name, batch)
             with self.lock:
                 cache = self.translations.setdefault(lang, {})
-                for orig, tr in zip(batch, translated):
+                for orig, tr in zip(batch, translated, strict=True):
                     cache[orig] = tr
                 self.version += 1
+
+    def set_language(self, lang: str, translate_content: bool = True) -> None:
+        """Active une langue d'affichage : libellés intégrés (sans LLM) immédiatement, puis
+        traduction LLM du reste (graine, requêtes, résultats) en arrière-plan si demandé.
+        Sans Ollama, l'échec est journalisé une fois et les textes originaux restent affichés."""
+        if lang and lang not in LANGUAGES:
+            raise ValueError(f"langue inconnue: {lang}")
+        with self.lock:
+            if not lang:
+                self.translate_lang = ""
+                self.translate_status = ""
+                self.version += 1
+                return
+            cache = self.translations.setdefault(lang, {})
+            for src, dst in builtin_translation_cache(lang).items():
+                cache.setdefault(src, dst)
+            self.translate_lang = lang
+            self.version += 1
+        if translate_content:
+            threading.Thread(target=_run_translation, args=(self, lang), daemon=True,
+                             name="translate").start()
 
     def toggle_pause(self) -> bool:
         with self.lock:
@@ -1223,9 +1309,15 @@ class Session:
 # Vue web : tree graph SVG auto-actualisé (serveur local stdlib) + snapshot HTML
 # --------------------------------------------------------------------------
 
-HTML_TEMPLATE = r"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
+HTML_TEMPLATE = r"""<!doctype html><html lang="__LANG__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>websearch · __SEED__</title>
+<meta name="description" content="__APP__ · exploration tree for “__SEED__”: focus reformulations and adjacent topics, round by round.">
+<meta name="generator" content="__APP__ __VERSION__">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f1218">
+<title>__APP__ · __SEED__</title>
 <style>
 :root{--bg:#0f1218;--fg:#e6e9ef;--mut:#8b93a5;--line:#2a3140;--card:#161c28;--acc:#4c8dff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -1270,7 +1362,7 @@ ul.hres li .mark{display:inline-block;width:1.3em;color:var(--c)}
 #log{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:11px;max-height:140px;overflow:auto;border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
 </style></head><body>
 <header>
-<div class="row"><h1>websearch · <b id="seed">__SEED__</b></h1><span class="badge" id="round"></span><span class="badge" id="status"></span><span class="badge" id="eta"></span>
+<div class="row"><h1>__APP__ · <b id="seed">__SEED__</b></h1><span class="badge" id="round"></span><span class="badge" id="status"></span><span class="badge" id="eta"></span>
 <span id="ctl" class="row" style="display:__CTL__"><button onclick="api('/api/round')" data-ui="btn_round">round maintenant</button><button id="pause" onclick="api('/api/pause')">pause</button>
 <input id="newseed" placeholder="nouvelle graine…" onkeydown="if(event.key==='Enter'){api('/api/seed',{seed:this.value});this.value=''}"></span>
 <div id="nav" class="row"><button data-view="tree" onclick="setView('tree')">&#9652; <span data-ui="btn_tree">arbre</span></button><button data-view="history" onclick="setView('history')">&#9776; <span data-ui="btn_history">historique complet</span></button></div>
@@ -1397,12 +1489,25 @@ draw(STATE);if(LIVE){poll(true);setInterval(poll,2000);}window.addEventListener(
 </script></body></html>"""
 
 
+_TEMPLATE_TOKEN_RE = re.compile(r"__(LANG|APP|VERSION|SEED|STATE|LIVE|CTL)__")
+
+
 def render_html(state: dict, live: bool) -> str:
-    return (HTML_TEMPLATE
-            .replace("__SEED__", htmlmod.escape(state["seed"]))
-            .replace("__STATE__", json.dumps(state, ensure_ascii=False).replace("</", "<\\/"))
-            .replace("__LIVE__", "true" if live else "false")
-            .replace("__CTL__", "flex" if live else "none"))
+    """Substitution en une seule passe : une graine contenant « __STATE__ » ou un autre
+    marqueur ne peut pas déclencher une seconde substitution."""
+    lang = state.get("html_lang") or UI_SOURCE_LANG
+    if lang not in LANGUAGES:
+        lang = UI_SOURCE_LANG
+    values = {
+        "LANG": lang,
+        "APP": htmlmod.escape(APP_NAME),
+        "VERSION": htmlmod.escape(__version__),
+        "SEED": htmlmod.escape(state["seed"]),
+        "STATE": json.dumps(state, ensure_ascii=False).replace("</", "<\\/").replace("<!--", "<\\!--"),
+        "LIVE": "true" if live else "false",
+        "CTL": "flex" if live else "none",
+    }
+    return _TEMPLATE_TOKEN_RE.sub(lambda m: values[m.group(1)], HTML_TEMPLATE)
 
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -1472,6 +1577,8 @@ def _run_translation(session: Session, lang: str) -> None:
     except BackendError as exc:
         with session.lock:
             session.translate_status = ""
+            if builtin_translation_cache(lang):
+                session.translate_lang = lang  # libellés intégrés toujours utilisables
             session.version += 1
         session.note(f"traduction échouée: {exc}")
         return
@@ -1482,11 +1589,39 @@ def _run_translation(session: Session, lang: str) -> None:
     session.note(f"traduction -> {lang_name} terminée")
 
 
+CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+    "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
+    "frame-ancestors 'none'"
+)
+
+
+def _host_for_url(host: str) -> str:
+    return f"[{host}]" if ":" in host else host
+
+
+def allowed_host_headers(port: int) -> set[str]:
+    """Valeurs d'en-tête Host acceptées : boucle locale + port exact (anti DNS rebinding)."""
+    return {f"{h}:{port}" for h in ("127.0.0.1", "localhost", "[::1]")}
+
+
+class _LocalHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+class _LocalHTTPServerV6(_LocalHTTPServer):
+    address_family = socket.AF_INET6
+
+
 class WebServer:
     """Serveur HTTP local (thread daemon). GET / (tree graph), GET /state.json ;
-    POST /api/viewed|pivot|round|pause|seed (JSON). Écoute 127.0.0.1 par défaut."""
+    POST /api/* (JSON). Boucle locale uniquement ; en-tête Host vérifié (DNS rebinding),
+    POST exigeant Content-Type JSON et Origin locale (CSRF)."""
 
     def __init__(self, session: Session, host: str, port: int):
+        if host not in LOOPBACK_HOSTS:
+            raise ValueError(f"hôte web non local refusé: {host}")
         self.session = session
         outer = self
 
@@ -1503,10 +1638,34 @@ class WebServer:
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+                self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+                self.send_header("Cross-Origin-Resource-Policy", "same-origin")
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _host_ok(self) -> bool:
+                host = (self.headers.get("Host") or "").strip().lower()
+                if host in outer.allowed_hosts:
+                    return True
+                log.warning("requête web refusée: Host %r non autorisé", host)
+                self._send(403, b'{"error":"host"}', "application/json")
+                return False
+
+            def _origin_ok(self) -> bool:
+                origin = (self.headers.get("Origin") or "").strip().lower()
+                if not origin:
+                    return True  # clients non navigateur (curl, tests) : pas d'Origin
+                if origin in outer.allowed_origins:
+                    return True
+                log.warning("requête web refusée: Origin %r non autorisée", origin)
+                self._send(403, b'{"error":"origin"}', "application/json")
+                return False
+
             def do_GET(self) -> None:  # noqa: N802
+                if not self._host_ok():
+                    return
                 path = urllib.parse.urlsplit(self.path).path
                 if path == "/":
                     self._send(200, render_html(outer.session.snapshot(), live=True).encode("utf-8"), "text/html; charset=utf-8")
@@ -1516,9 +1675,20 @@ class WebServer:
                     self._send(404, b"not found", "text/plain")
 
             def do_POST(self) -> None:  # noqa: N802
+                if not self._host_ok() or not self._origin_ok():
+                    return
+                ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if ctype != "application/json":
+                    # un formulaire / text/plain inter-sites ne déclenche pas de preflight CORS :
+                    # exiger JSON force le preflight, que ce serveur ne satisfait jamais
+                    self._send(415, b'{"error":"content-type must be application/json"}', "application/json")
+                    return
                 path = urllib.parse.urlsplit(self.path).path
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
+                    if n < 0:
+                        self._send(400, b'{"error":"content-length"}', "application/json")
+                        return
                     if n > MAX_POST_BODY_BYTES:
                         self._send(413, b'{"error":"body too large"}', "application/json")
                         return
@@ -1583,16 +1753,23 @@ class WebServer:
                         self._send(400, b'{"error":"lang"}', "application/json")
                         return
                     else:
-                        threading.Thread(target=_run_translation, args=(sess, lang), daemon=True).start()
+                        with sess.lock:
+                            busy = bool(sess.translate_status)
+                        if busy:
+                            self._send(409, b'{"error":"translation already running"}', "application/json")
+                            return
+                        sess.set_language(lang)
                 else:
                     self._send(404, b'{"error":"route"}', "application/json")
                     return
                 self._send(200, b'{"ok":true}', "application/json")
 
-        self.httpd = ThreadingHTTPServer((host, port), Handler)
-        self.httpd.daemon_threads = True
+        server_cls = _LocalHTTPServerV6 if ":" in host else _LocalHTTPServer
+        self.httpd = server_cls((host, port), Handler)
         self.port = self.httpd.server_address[1]
-        self.url = f"http://{host}:{self.port}/"
+        self.url = f"http://{_host_for_url(host)}:{self.port}/"
+        self.allowed_hosts = allowed_host_headers(self.port)
+        self.allowed_origins = {f"http://{h}" for h in self.allowed_hosts}
         self.thread = threading.Thread(target=self.httpd.serve_forever, name="web", daemon=True)
 
     def start(self) -> "WebServer":
@@ -1611,7 +1788,7 @@ class WebServer:
 
 def enable_vt_windows() -> None:
     if sys.platform.startswith("win"):
-        os.system("")  # active le traitement VT100 sur les consoles modernes
+        os.system("")  # commande vide constante : active le VT100 sous Windows  # nosec B605 B607
 
 
 class Style:
@@ -1642,14 +1819,15 @@ def open_url(url: str) -> tuple[bool, str]:
         cmd = ["open", url]
     elif sys.platform.startswith("win"):
         try:
-            os.startfile(url)  # type: ignore[attr-defined]
+            os.startfile(url)  # type: ignore[attr-defined]  # URL validée http(s)  # nosec B606
             return True, "ouvert (os.startfile)"
         except OSError as exc:
             return False, f"échec os.startfile: {exc}"
     else:
         cmd = ["xdg-open", url]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,  # nosec B603
+                       timeout=10)  # liste d'arguments fixe, URL validée http(s), aucun shell
         return True, f"ouvert ({cmd[0]})"
     except FileNotFoundError:
         return False, f"commande introuvable: {cmd[0]}"
@@ -1866,7 +2044,7 @@ def render_screen(session: Session, sel: list[int], focus: int, st: Style, digit
         l1 = render_column(v1, w1, body_h, sel[0], focus == 0, session, st, t1)
         l2 = render_column(v2, w2, body_h, sel[1], focus == 1, session, st, t2)
         sep = st.dim("│")
-        for a, b in zip(l1, l2):
+        for a, b in zip(l1, l2, strict=False):
             out.append(f"{a}{sep}{b}")
     else:
         h1 = body_h // 2
@@ -2056,47 +2234,226 @@ def run_noninteractive(session: Session, cfg: Config, as_json: bool) -> None:
 # Main
 # --------------------------------------------------------------------------
 
+MODE_WEB, MODE_TUI, MODE_HTML, MODE_JSON, MODE_TEXT = "web", "tui", "html", "json", "text"
+
+
+def normalize_ollama_host(raw: str) -> Optional[str]:
+    """OLLAMA_HOST accepte « host:port » (convention Ollama) ou une URL http(s) complète."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    url = safe_http_url(raw)
+    return url.rstrip("/") if url else None
+
+
 def parse_args(argv: Optional[list[str]] = None) -> tuple[Config, argparse.Namespace]:
-    p = argparse.ArgumentParser(description="Recherche web deux colonnes, enrichissement continu (sans clé API).")
+    p = argparse.ArgumentParser(
+        prog="websearch.py",
+        description=f"{APP_NAME} — recherche web par pivots successifs, vue HTML par défaut (sans clé API).",
+        epilog="Modes : vue web HTML live (défaut en terminal), --tui (interface terminal), "
+               "snapshot HTML (défaut hors terminal), --json, --text.",
+    )
+    p.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     p.add_argument("-q", "--query", help="graine initiale (sinon prompt interactif)")
     p.add_argument("-n", "--limit", type=int, default=DEFAULT_LIMIT_PER_QUERY, help="résultats max par requête")
     p.add_argument("--interval", type=float, default=DEFAULT_ROUND_INTERVAL, help="secondes entre rounds")
     p.add_argument("--delay", type=float, default=DEFAULT_REQUEST_DELAY, help="secondes entre requêtes HTTP")
-    p.add_argument("--rounds", type=int, default=0, help="nombre de rounds (0 = illimité ; non-TTY: défaut 1)")
+    p.add_argument("--rounds", type=int, default=0,
+                   help="nombre de rounds (0 = illimité en vue web/TUI ; snapshot/JSON/texte : défaut 1)")
+    p.add_argument("--lang", choices=sorted(LANGUAGES), default="",
+                   help="langue de recherche et d'affichage (fr, en intégrées ; autres via Ollama)")
     p.add_argument("--no-ollama", action="store_true", help="expansion heuristique seule")
     p.add_argument("--ollama-model", default=None, help="modèle Ollama (défaut: $OLLAMA_MODEL ou premier listé)")
     p.add_argument("--no-color", action="store_true")
-    p.add_argument("--json", action="store_true", help="sortie JSON (mode non interactif)")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--tui", action="store_true", help="interface terminal deux colonnes au lieu de la vue HTML")
+    mode.add_argument("--json", action="store_true", help="sortie JSON sur stdout puis fin")
+    mode.add_argument("--text", action="store_true", help="sortie texte brut sur stdout puis fin")
     p.add_argument("--log-file", default=os.environ.get("WEBSEARCH_LOG"), help="fichier de log (défaut: $WEBSEARCH_LOG)")
-    p.add_argument("--web", type=int, nargs="?", const=8765, default=None, metavar="PORT",
-                   help="sert le tree graph HTML auto-actualisé sur http://127.0.0.1:PORT/ (défaut 8765)")
-    p.add_argument("--web-host", default="127.0.0.1", help="interface d'écoute du serveur web (défaut 127.0.0.1)")
-    p.add_argument("--web-only", action="store_true", help="pas de TUI : serveur web + rounds jusqu'à Ctrl-C (implique --web)")
-    p.add_argument("--html-out", default=None, metavar="PATH", help="écrit un snapshot HTML statique du graphe après chaque round")
+    p.add_argument("--web", type=int, nargs="?", const=DEFAULT_WEB_PORT, default=None, metavar="PORT",
+                   help=f"port de la vue web (défaut {DEFAULT_WEB_PORT}, repli automatique si occupé) ; avec --tui : "
+                        "sert aussi la vue web")
+    p.add_argument("--web-host", default="127.0.0.1", help="interface d'écoute du serveur web (boucle locale uniquement)")
+    p.add_argument("--web-only", action="store_true", help=argparse.SUPPRESS)  # compat v1.0 : vue web = défaut
+    p.add_argument("--no-browser", action="store_true", help="ne pas ouvrir le navigateur automatiquement")
+    p.add_argument("--html-out", default=None, metavar="PATH",
+                   help="chemin du snapshot HTML (réécrit après chaque round)")
     p.add_argument("--no-web-ssh-hint", action="store_true",
                    help="ne pas détecter/afficher les instructions de tunnel SSH au démarrage du serveur web")
     p.add_argument("--debug", action="store_true")
     a = p.parse_args(argv)
     if a.limit < 1 or a.delay < 0 or a.interval < 1 or a.rounds < 0:
         p.error("--limit >= 1, --delay >= 0, --interval >= 1, --rounds >= 0")
+    if a.web_only and (a.tui or a.json or a.text):
+        p.error("--web-only est incompatible avec --tui/--json/--text")
     cfg = Config(limit=a.limit, round_interval=a.interval, request_delay=a.delay, rounds=a.rounds,
                  use_ollama=not a.no_ollama, color=not a.no_color and os.environ.get("NO_COLOR") is None,
-                 debug=a.debug)
+                 debug=a.debug, lang=a.lang)
+    host = normalize_ollama_host(cfg.ollama_host)
+    if host is None:
+        p.error(f"OLLAMA_HOST invalide ({cfg.ollama_host!r}) : http(s)://hôte:port attendu")
+    cfg.ollama_host = host
     if a.ollama_model:
         cfg.ollama_model = a.ollama_model
-    if a.web_only and a.web is None:
-        a.web = 8765
-    if a.web is not None:
-        if a.web_host not in LOOPBACK_HOSTS:
-            p.error("--web-host doit rester local (127.0.0.1, localhost ou ::1); utilisez un tunnel SSH")
-        if not (0 <= a.web <= 65535):
-            p.error("--web PORT hors plage")
-        cfg.web_port, cfg.web_host = a.web, a.web_host
+    if a.web_host not in LOOPBACK_HOSTS:
+        p.error("--web-host doit rester local (127.0.0.1, localhost ou ::1); utilisez un tunnel SSH")
+    port = DEFAULT_WEB_PORT if a.web is None else a.web
+    if not (0 <= port <= 65535):
+        p.error("--web PORT hors plage")
+    cfg.web_port, cfg.web_host = port, a.web_host
     if a.html_out:
         cfg.html_out = os.path.abspath(os.path.expanduser(a.html_out))
-    if a.web_only and not a.query:
-        p.error("--web-only requiert -q/--query")
     return cfg, a
+
+
+def choose_mode(args: argparse.Namespace, interactive: bool) -> str:
+    """Mode d'exécution : option explicite, sinon vue web HTML en terminal, snapshot HTML hors terminal."""
+    if args.json:
+        return MODE_JSON
+    if args.text:
+        return MODE_TEXT
+    if args.tui:
+        return MODE_TUI
+    if args.web_only or interactive:
+        return MODE_WEB
+    return MODE_HTML
+
+
+def default_snapshot_path(seed: str, directory: Optional[str] = None) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", seed.lower()).strip("-")[:48] or "query"
+    name = f"dendropivot-{slug}-{time.strftime('%Y%m%d-%H%M%S')}.html"
+    return os.path.join(directory or os.getcwd(), name)
+
+
+def start_web_server(session: Session, host: str, port: int) -> Optional[WebServer]:
+    """Démarre le serveur ; si le port est occupé, repli sur un port libre attribué par l'OS."""
+    for candidate in ([port, 0] if port else [0]):
+        try:
+            return WebServer(session, host, candidate).start()
+        except OSError as exc:
+            session.note(f"port {candidate} indisponible ({exc})" + (" -> port libre automatique" if candidate else ""))
+            log.warning("serveur web sur %s:%s impossible: %s", host, candidate, exc)
+    return None
+
+
+def prompt_query(prompt: str = "Recherche (q pour quitter) > ") -> Optional[str]:
+    try:
+        query = input(prompt)
+    except EOFError:
+        print()
+        return None
+    query = re.sub(r"\s+", " ", query).strip()[:MAX_SEED_LENGTH]
+    return None if not query or query.lower() == "q" else query
+
+
+def _stop_session(session: Optional[Session], web: Optional[WebServer], worker: Optional[threading.Thread]) -> None:
+    if session is not None:
+        session.stop_event.set()
+        session.wake_event.set()
+    if web is not None:
+        web.stop()
+    if worker is not None:
+        worker.join(timeout=2.0)
+
+
+def run_web_mode(cfg: Config, args: argparse.Namespace, planner: Planner, pool: BackendPool, query: str) -> int:
+    """Mode par défaut : vue HTML live dans le navigateur, rounds en continu jusqu'à Ctrl-C."""
+    session = Session(query, cfg, planner, pool)
+    if cfg.lang:
+        session.set_language(cfg.lang)
+    web = start_web_server(session, cfg.web_host, cfg.web_port)
+    if web is None:
+        print("serveur web indisponible (voir le journal)", file=sys.stderr)
+        return 1
+    worker: Optional[threading.Thread] = None
+    try:
+        session.web_url = web.url
+        session.note(f"vue web: {web.url}")
+        ssh_hint = attach_ssh_hint(session, web.port, cfg.web_host, args.no_web_ssh_hint)
+        worker = threading.Thread(target=session.worker, name="rounds", daemon=True)
+        worker.start()
+        print(f"{APP_NAME} {__version__} · vue web : {web.url}  (Ctrl-C pour arrêter)", flush=True)
+        if cfg.html_out:
+            print(f"snapshot HTML : {cfg.html_out}", flush=True)
+        if ssh_hint:
+            print("\n" + ssh_hint + "\n", flush=True)
+        elif not args.no_browser:
+            ok, msg = open_url(web.url)
+            if not ok:
+                print(f"navigateur non ouvert ({msg}) : ouvrez {web.url}", file=sys.stderr, flush=True)
+        while worker.is_alive():
+            worker.join(timeout=1.0)
+        print(session.status, flush=True)
+        return 0
+    finally:
+        _stop_session(session, web, worker)
+
+
+def run_snapshot_mode(cfg: Config, planner: Planner, pool: BackendPool, query: str, mode: str) -> int:
+    """Hors terminal : exécute les rounds puis écrit un snapshot HTML (défaut), du JSON ou du texte."""
+    session = Session(query, cfg, planner, pool)
+    if mode == MODE_HTML:
+        if not cfg.html_out:
+            cfg.html_out = default_snapshot_path(query)
+        rounds = cfg.rounds or 1
+        for _ in range(rounds):
+            session.run_round()
+        if cfg.lang:
+            session.set_language(cfg.lang, translate_content=False)
+            session.retranslate_if_active()  # synchrone : le fichier écrit contient la traduction
+        session.write_html_snapshot()
+        if not os.path.exists(cfg.html_out):
+            print(f"échec d'écriture du snapshot HTML : {cfg.html_out}", file=sys.stderr)
+            return 1
+        print(cfg.html_out)
+        return 0
+    run_noninteractive(session, cfg, as_json=(mode == MODE_JSON))
+    session.write_html_snapshot()
+    return 0
+
+
+def run_tui_mode(cfg: Config, args: argparse.Namespace, planner: Planner, pool: BackendPool,
+                 st: Style, pending: Optional[str]) -> int:
+    """Interface terminal deux colonnes (v1.0), avec vue web optionnelle via --web."""
+    session: Optional[Session] = None
+    worker: Optional[threading.Thread] = None
+    web: Optional[WebServer] = None
+    try:
+        while True:
+            if pending is not None:
+                query, pending = pending, None
+            else:
+                if session is not None and not session.paused:
+                    session.toggle_pause()  # gèle les rounds pendant la saisie
+                query = prompt_query()
+                if query is None:
+                    return 0
+            if session is None:
+                session = Session(query, cfg, planner, pool)
+                if cfg.lang:
+                    session.set_language(cfg.lang)
+                if args.web is not None:
+                    web = start_web_server(session, cfg.web_host, cfg.web_port)
+                    if web is not None:
+                        session.web_url = web.url
+                        session.note(f"vue web: {web.url}")
+                        ssh_hint = attach_ssh_hint(session, web.port, cfg.web_host, args.no_web_ssh_hint)
+                        if ssh_hint:
+                            print("\n" + ssh_hint + "\n", file=sys.stderr, flush=True)
+                worker = threading.Thread(target=session.worker, name="rounds", daemon=True)
+                worker.start()
+            else:
+                session.reset(query)
+                if session.paused:
+                    session.toggle_pause()
+            action = picker_loop_interactive(session, st)
+            sys.stdout.write("\x1b[0m\n" if st.enabled else "\n")
+            if action == "quit":
+                return 0
+    finally:
+        _stop_session(session, web, worker)
 
 
 def setup_logging(cfg: Config, log_file: Optional[str], interactive: bool) -> None:
@@ -2116,97 +2473,35 @@ def setup_logging(cfg: Config, log_file: Optional[str], interactive: bool) -> No
 def main(argv: Optional[list[str]] = None) -> int:
     cfg, args = parse_args(argv)
     interactive = interactive_available()
-    setup_logging(cfg, args.log_file, interactive)
+    mode = choose_mode(args, interactive)
+    if mode == MODE_TUI and not interactive:
+        print("--tui requiert un terminal interactif (TTY)", file=sys.stderr)
+        return 2
+    # le logging stderr casserait l'écran de la TUI ; ailleurs il reste utile
+    setup_logging(cfg, args.log_file, interactive=(mode == MODE_TUI))
     enable_vt_windows()
     st = Style(cfg.color and interactive)
+    log.info("%s %s démarré (mode %s)", APP_NAME, __version__, mode)
     planner = Planner(cfg)
     pool = BackendPool(BACKENDS)
 
-    pending = args.query
-    session: Optional[Session] = None
-    worker: Optional[threading.Thread] = None
-    web: Optional[WebServer] = None
-
-    def attach_web(sess: Session) -> Optional[str]:
-        nonlocal web
-        if cfg.web_port or args.web is not None:
-            try:
-                web = WebServer(sess, cfg.web_host, cfg.web_port).start()
-                sess.web_url = web.url
-                sess.note(f"vue web: {web.url}")
-                return attach_ssh_hint(sess, web.port, cfg.web_host, args.no_web_ssh_hint)
-            except OSError as exc:
-                sess.note(f"serveur web indisponible ({exc})")
-                log.error("serveur web: %s", exc)
-        return None
-
-    if args.web_only:
-        session = Session(args.query.strip(), cfg, planner, pool)
-        ssh_hint = attach_web(session)
-        if web is None:
-            return 1
-        worker = threading.Thread(target=session.worker, name="rounds", daemon=True)
-        worker.start()
-        print(f"vue web: {web.url}  (Ctrl-C pour arrêter)", flush=True)
-        if ssh_hint:
-            print("\n" + ssh_hint + "\n", flush=True)
-        try:
-            while worker.is_alive():
-                worker.join(timeout=1.0)
-            print(session.status)
-        finally:
-            session.stop_event.set()
-            session.wake_event.set()
-            web.stop()
-        return 0
-
-    try:
-        while True:
-            if pending is not None:
-                query, pending = pending.strip(), None
-            else:
-                if session is not None and not session.paused:
-                    session.toggle_pause()  # gèle les rounds pendant la saisie
-                try:
-                    query = input("Recherche (q pour quitter) > ").strip()
-                except EOFError:
-                    print()
-                    return 0
-            if query.lower() == "q" or not query:
-                return 0
-
+    query = re.sub(r"\s+", " ", args.query).strip()[:MAX_SEED_LENGTH] if args.query else None
+    if mode == MODE_TUI:
+        return run_tui_mode(cfg, args, planner, pool, st, query)
+    if query is None:
+        query = prompt_query("Recherche > ") if interactive else None
+        if query is None:
             if not interactive:
-                s = Session(query, cfg, planner, pool)
-                run_noninteractive(s, cfg, args.json)
-                s.write_html_snapshot()
-                return 0
-
-            if session is None:
-                session = Session(query, cfg, planner, pool)
-                ssh_hint = attach_web(session)
-                if ssh_hint:
-                    print("\n" + ssh_hint + "\n", file=sys.stderr, flush=True)
-                worker = threading.Thread(target=session.worker, name="rounds", daemon=True)
-                worker.start()
-            else:
-                session.reset(query)
-                if session.paused:
-                    session.toggle_pause()
-            action = picker_loop_interactive(session, st)
-            sys.stdout.write("\x1b[0m\n" if st.enabled else "\n")
-            if action == "quit":
-                return 0
-    finally:
-        if session is not None:
-            session.stop_event.set()
-            session.wake_event.set()
-        if web is not None:
-            web.stop()
-        if worker is not None:
-            worker.join(timeout=2.0)
+                print("requête manquante : utilisez -q/--query", file=sys.stderr)
+                return 2
+            return 0
+    if mode == MODE_WEB:
+        return run_web_mode(cfg, args, planner, pool, query)
+    return run_snapshot_mode(cfg, planner, pool, query, mode)
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """Point d'entrée (codes de sortie : 0 ok, 1 erreur, 2 usage, 130 Ctrl-C)."""
     try:
         sys.exit(main())
     except KeyboardInterrupt:
@@ -2214,3 +2509,7 @@ if __name__ == "__main__":
         sys.exit(130)
     except BrokenPipeError:
         sys.exit(0)
+
+
+if __name__ == "__main__":
+    cli()
