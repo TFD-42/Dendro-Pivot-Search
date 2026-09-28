@@ -5,7 +5,7 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "dendropivot"
 version = "1.1.0"
-description = "Arborescent web search tool with Ollama query expansion"
+description = "Privacy-first local web search explorer for Python — no API key, optional Ollama, Python stdlib only"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

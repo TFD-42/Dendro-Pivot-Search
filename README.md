@@ -2,13 +2,14 @@
 
 # DendroPivot
 
-### Pivot-based web search explorer: grow a tree of knowledge from one query
+### Privacy-first local web search explorer for Python — expand one query into a navigable knowledge tree
 
-**An innovative methodology to learn deeper: start from one query, then pivot, branch and grow a tree of knowledge around it.**
+**No API key required. Optional local Ollama LLM. Python standard library only.**
 
-DendroPivot turns a single search into a guided learning path. Every round, your seed query branches into five *focus* reformulations and five *adjacent* topics; what you read reinforces the tree, and any result can become the new root. It runs in the terminal or as a live local web tree, queries several free search indexes without an API key, can use a local LLM through [Ollama](https://ollama.com), and needs nothing but the Python standard library.
+DendroPivot turns a single search into a guided exploration path. Every round, your seed query branches into five *focus* reformulations and five *adjacent* topics; what you read reinforces the tree, and any result can become the new root. It runs in the terminal or as a live local web tree, queries several free search indexes without an API key, can use a local LLM through [Ollama](https://ollama.com), and needs nothing but the Python standard library.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![CI](https://github.com/TFD-42/dendropivot-search/actions/workflows/ci.yml/badge.svg)](https://github.com/TFD-42/dendropivot-search/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Dependencies: stdlib only](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)](requirements.txt)
 [![No API key](https://img.shields.io/badge/API%20key-not%20required-success)](#search-backends)
