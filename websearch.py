@@ -63,6 +63,7 @@ __version__ = "1.1.0"
 APP_NAME = "DendroPivot"
 
 import argparse
+import concurrent.futures
 import html as htmlmod
 import json
 import logging
@@ -99,6 +100,8 @@ DEFAULT_LIMIT_PER_QUERY = 6
 DEFAULT_ROUND_INTERVAL = 60.0   # secondes entre deux rounds
 DEFAULT_REQUEST_DELAY = 1.5     # secondes entre deux requêtes HTTP de recherche
 BACKEND_COOLDOWN = 180.0        # secondes de mise à l'écart d'un backend après échec
+BACKEND_POOL_WORKERS = 3        # backends lancés en parallèle via ThreadPoolExecutor
+BACKEND_MIN_INTERVAL = 1.0      # intervalle minimum (s) entre deux appels au même backend
 MAX_RESULTS_PER_TOPIC = 12
 MAX_PER_DOMAIN = 2             # par topic, évite qu'un site monopolise une requête
 # domaines "bruit générique" (dictionnaires) exclus sauf si la requête vise une définition
@@ -415,11 +418,12 @@ BACKENDS: list[tuple[str, Callable[[str, int], list[Result]]]] = [
 
 
 class BackendPool:
-    """Rotation round-robin pour diversifier les index, cooldown après échec."""
+    """Backends lancés en parallèle (ThreadPoolExecutor), fusionnés par reciprocal-rank scoring."""
 
     def __init__(self, backends: list[tuple[str, Callable[[str, int], list[Result]]]]):
         self._backends = backends
         self._cooldown_until: dict[str, float] = {}
+        self._last_request: dict[str, float] = {}  # rate limiting par backend
         self._cursor = 0
         self._lock = threading.Lock()
 
@@ -427,9 +431,9 @@ class BackendPool:
         if not self._backends:
             return []
         if precise:
-            rotated = list(self._backends)   # ordre déclaré : index large d'abord (précision)
+            rotated = list(self._backends)
         else:
-            with self._lock:                 # rotation : diversité d'index pour l'exploration
+            with self._lock:
                 start = self._cursor
                 self._cursor = (self._cursor + 1) % len(self._backends)
             rotated = self._backends[start:] + self._backends[:start]
@@ -440,41 +444,95 @@ class BackendPool:
 
     @staticmethod
     def _degenerate(results: list[Result]) -> bool:
-        """Vrai si un seul domaine occupe >= 60 % des résultats (bloc 'site' épinglé,
-        homonymie mal résolue par le moteur) — on préfère alors un autre index."""
+        """Vrai si un seul domaine occupe >= 60 % des résultats."""
         if len(results) < 4:
             return False
         doms = Counter(domain_of(r.url) for r in results)
         return doms.most_common(1)[0][1] / len(results) >= 0.6
 
-    def search(self, query: str, limit: int, precise: bool = True,
-               seen: Optional[set[str]] = None) -> tuple[list[Result], str]:
-        """Essaie les backends jusqu'à obtenir des résultats non dégénérés et non déjà vus.
-        Retourne le meilleur lot obtenu (éventuellement vide) ; lève BackendError si tous échouent."""
-        errors: list[str] = []
-        best: tuple[list[Result], str] = ([], "")
-        seen = seen or set()
-        for name, fn in self._order(precise):
-            try:
-                results = fn(query, limit * 2)
-            except BackendError as exc:
-                errors.append(f"{name}: {exc}")
-                self._cooldown_until[name] = time.time() + BACKEND_COOLDOWN
-                log.debug("backend %s échec sur %r: %s", name, query, exc)
-                continue
+    def _call_backend(self, name: str, fn: Callable[[str, int], list[Result]],
+                      query: str, fetch: int) -> tuple[str, list[Result]]:
+        """Appelle un backend en respectant le rate-limit, met à jour le cooldown si échec."""
+        with self._lock:
+            last = self._last_request.get(name, 0.0)
+            wait = BACKEND_MIN_INTERVAL - (time.time() - last)
+        if wait > 0:
+            time.sleep(wait)
+        with self._lock:
+            self._last_request[name] = time.time()
+        try:
+            results = fn(query, fetch)
             for r in results:
                 r.backend = name
-            fresh = [r for r in results if r.url not in seen]
-            degenerate = self._degenerate(results)
-            if fresh and not degenerate:
-                return fresh[:limit], name
-            log.debug("backend %s sur %r: %s -> backend suivant", name, query,
-                      "dégénéré (mono-domaine)" if degenerate else "rien de nouveau")
-            if len(fresh) > len(best[0]):
-                best = (fresh[:limit], name)
-        if not best[1] and errors and len(errors) == len(self._backends):
-            raise BackendError(" | ".join(errors))
-        return best
+            return name, results
+        except BackendError as exc:
+            with self._lock:
+                self._cooldown_until[name] = time.time() + BACKEND_COOLDOWN
+            log.debug("backend %s échec sur %r: %s", name, query, exc)
+            raise
+
+    @staticmethod
+    def _reciprocal_rank_fuse(
+        per_backend: list[tuple[str, list[Result]]],
+        seen: set[str],
+        limit: int,
+    ) -> tuple[list[Result], str]:
+        """Fusionne les listes par Reciprocal Rank Fusion (k=60).
+        Retourne les *limit* meilleurs résultats frais + le nom des backends qui ont contribué."""
+        scores: dict[str, float] = {}
+        result_by_url: dict[str, Result] = {}
+        backends_used: list[str] = []
+        for name, results in per_backend:
+            backends_used.append(name)
+            for rank, r in enumerate(results):
+                if not r.url:
+                    continue
+                scores[r.url] = scores.get(r.url, 0.0) + 1.0 / (rank + 60)
+                if r.url not in result_by_url:
+                    result_by_url[r.url] = r
+        ranked = sorted(scores.keys(), key=lambda u: scores[u], reverse=True)
+        fresh = [result_by_url[u] for u in ranked if u not in seen][:limit]
+        label = "+".join(backends_used) if backends_used else ""
+        return fresh, label
+
+    def search(self, query: str, limit: int, precise: bool = True,
+               seen: Optional[set[str]] = None) -> tuple[list[Result], str]:
+        """Lance jusqu'à BACKEND_POOL_WORKERS backends en parallèle, fusionne par RR scoring.
+        Retourne le meilleur lot (éventuellement vide) ; lève BackendError si tous échouent."""
+        seen = seen or set()
+        ordered = self._order(precise)
+        if not ordered:
+            return [], ""
+
+        errors: list[str] = []
+        per_backend: list[tuple[str, list[Result]]] = []
+
+        workers = min(BACKEND_POOL_WORKERS, len(ordered))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {
+                pool.submit(self._call_backend, name, fn, query, limit * 2): name
+                for name, fn in ordered
+            }
+            for fut in concurrent.futures.as_completed(futs):
+                name = futs[fut]
+                try:
+                    _, results = fut.result()
+                    per_backend.append((name, results))
+                except BackendError as exc:
+                    errors.append(f"{name}: {exc}")
+
+        if not per_backend:
+            if errors and len(errors) == len(self._backends):
+                raise BackendError(" | ".join(errors))
+            return [], ""
+
+        fused, label = self._reciprocal_rank_fuse(per_backend, seen, limit)
+        if fused:
+            return fused, label
+        # fallback: renvoie ce qu'on a même si dégénéré
+        all_results = [r for _, rs in per_backend for r in rs]
+        fresh_all = [r for r in all_results if r.url not in seen]
+        return fresh_all[:limit], label
 
 
 def safe_http_url(url: str) -> Optional[str]:
