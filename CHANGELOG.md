@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- README screenshot of the language selector (`docs/dendropivot-language-selector.png`, metadata-free).
+
 ## [1.1.0] - 2026-09-28
 
 ### Added

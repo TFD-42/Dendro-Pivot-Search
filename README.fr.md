@@ -306,6 +306,12 @@ Le mode par défaut sert un arbre auto-actualisé : graine en tête, groupes foc
 | Clic sur un résultat | Ouvre le lien et le marque consulté |
 | Maj + clic | Pivote la graine sur ce résultat |
 
+<p align="center">
+  <img src="docs/dendropivot-language-selector.png" alt="Sélecteur de langue DendroPivot : original, français, anglais, espagnol, italien, chinois et russe pour l’interface et les résultats" width="320">
+</p>
+
+<p align="center"><em>Sélecteur de langue : interface et résultats traduits par le LLM local (interfaces anglaise et française intégrées).</em></p>
+
 Endpoints (boucle locale) : `GET /`, `GET /state.json`, `POST /api/{viewed,pivot,round,back,forward,goto,pause,seed,translate}` (JSON).
 
 ## Serveur distant via SSH
@@ -416,7 +422,8 @@ dendropivot-search/
 │   ├── test_websearch.py     # tests unitaires hors réseau
 │   └── test_features_v11.py  # modes, langues, durcissement web, lanceur
 ├── docs/
-│   └── dendropivot-live-tree.png  # capture d’écran
+│   ├── dendropivot-live-tree.png          # capture : arbre live
+│   └── dendropivot-language-selector.png  # capture : sélecteur de langue
 ├── .github/
 │   ├── ISSUE_TEMPLATE/       # bug, fonctionnalité, config
 │   ├── PULL_REQUEST_TEMPLATE.md

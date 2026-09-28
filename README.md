@@ -306,6 +306,12 @@ The default mode serves an auto-refreshing top-down tree: the seed at the top, t
 | Click a result | Open the link and mark it as viewed (steers the next round) |
 | Shift + click a result | Pivot the seed onto that result |
 
+<p align="center">
+  <img src="docs/dendropivot-language-selector.png" alt="DendroPivot language selector: Original, French, English, Spanish, Italian, Chinese and Russian translation of the interface and results" width="320">
+</p>
+
+<p align="center"><em>Language selector: the interface and results are translated through the local LLM (English and French interfaces are built in).</em></p>
+
 HTTP endpoints, all bound to loopback: `GET /`, `GET /state.json`, and `POST /api/{viewed,pivot,round,back,forward,goto,pause,seed,translate}` with JSON bodies.
 
 ## Remote server over SSH
@@ -420,7 +426,8 @@ dendropivot-search/
 │   ├── test_websearch.py     # offline unit tests
 │   └── test_features_v11.py  # modes, languages, web hardening, launcher
 ├── docs/
-│   └── dendropivot-live-tree.png  # screenshot
+│   ├── dendropivot-live-tree.png          # screenshot: live tree
+│   └── dendropivot-language-selector.png  # screenshot: language selector
 ├── .github/
 │   ├── ISSUE_TEMPLATE/       # bug, feature, config
 │   ├── PULL_REQUEST_TEMPLATE.md
