@@ -276,6 +276,31 @@ def _http_get_with_retry(
     raise BackendError("max retries exceeded")  # unreachable
 
 
+def http_post(url: str, data: dict, timeout: int = REQUEST_TIMEOUT) -> str:
+    """POST *data* (application/x-www-form-urlencoded) and return response text."""
+    encoded = urllib.parse.urlencode(data).encode("utf-8")
+    hdrs = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    req = urllib.request.Request(url, data=encoded, headers=hdrs)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # http(s) validé  # nosec B310
+            status = resp.status
+            raw = _read_limited(resp)
+    except urllib.error.HTTPError as exc:
+        raise BackendError(f"HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise BackendError(f"réseau ({exc.reason})") from exc
+    except (TimeoutError, OSError) as exc:
+        raise BackendError(f"timeout/socket ({exc})") from exc
+    if status != 200:
+        raise BackendError(f"HTTP {status}")
+    return raw.decode("utf-8", errors="replace")
+
+
 def _extract_json_object(text: str) -> dict:
     """Extract the first balanced {...} JSON object from *text*.
 
@@ -410,10 +435,36 @@ def backend_yahoo(query: str, limit: int) -> list[Result]:
     return results
 
 
+_DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
+_DDG_RESULT_RE = re.compile(
+    r'<a[^>]+class="result-link"[^>]+href="([^"]+)"[^>]*>(.*?)</a>'
+    r'.*?<td[^>]+class="result-snippet"[^>]*>(.*?)</td>',
+    re.S,
+)
+
+
+def backend_ddg_lite(query: str, limit: int) -> list[Result]:
+    page = http_post(_DDG_LITE_URL, {"q": query, "kl": "en-us"})
+    results: list[Result] = []
+    for m in _DDG_RESULT_RE.finditer(page):
+        url = safe_http_url(htmlmod.unescape(m.group(1).strip()))
+        title = strip_tags(m.group(2))
+        snippet = strip_tags(m.group(3))
+        if not (url and title):
+            continue
+        results.append(Result(title=title, url=url, snippet=snippet, rank=len(results) + 1))
+        if len(results) >= limit:
+            break
+    if not results and "result-link" not in page and len(page) < 10000:
+        raise BackendError("réponse DDG Lite anormale (blocage probable)")
+    return results
+
+
 BACKENDS: list[tuple[str, Callable[[str, int], list[Result]]]] = [
     ("bing-rss", backend_bing_rss),
     ("marginalia", backend_marginalia),
     ("yahoo", backend_yahoo),
+    ("ddg-lite", backend_ddg_lite),
 ]
 
 

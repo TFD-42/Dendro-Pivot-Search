@@ -11,6 +11,7 @@ body:
         - bing-rss
         - marginalia
         - yahoo
+        - ddg-lite
     validations:
       required: true
   - type: input

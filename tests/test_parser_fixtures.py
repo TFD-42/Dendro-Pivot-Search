@@ -106,5 +106,50 @@ class YahooParserTests(unittest.TestCase):
             self.assertEqual(r.rank, i + 1)
 
 
+class DdgLiteParserTests(unittest.TestCase):
+    def _call(self, html: str, limit: int = 10) -> list:
+        with patch.object(MODULE, "http_post", return_value=html):
+            return MODULE.backend_ddg_lite("test query", limit)
+
+    def test_parses_three_results(self):
+        results = self._call(_fixture("ddg_lite_results.html"))
+        self.assertEqual(len(results), 3)
+
+    def test_first_result_title_and_url(self):
+        results = self._call(_fixture("ddg_lite_results.html"))
+        self.assertEqual(results[0].title, "DDG Result One")
+        self.assertEqual(results[0].url, "https://example.com/ddg-page1")
+
+    def test_snippet_text(self):
+        results = self._call(_fixture("ddg_lite_results.html"))
+        self.assertIn("Python", results[0].snippet)
+
+    def test_html_entities_in_snippet(self):
+        results = self._call(_fixture("ddg_lite_results.html"))
+        self.assertIn("&", results[0].snippet)
+
+    def test_inline_markup_stripped(self):
+        results = self._call(_fixture("ddg_lite_results.html"))
+        self.assertNotIn("<b>", results[1].snippet)
+        self.assertIn("bold", results[1].snippet)
+
+    def test_empty_snippet_returns_empty_string(self):
+        results = self._call(_fixture("ddg_lite_results.html"))
+        self.assertEqual(results[2].snippet, "")
+
+    def test_limit_respected(self):
+        results = self._call(_fixture("ddg_lite_results.html"), limit=2)
+        self.assertEqual(len(results), 2)
+
+    def test_rank_assigned(self):
+        results = self._call(_fixture("ddg_lite_results.html"))
+        for i, r in enumerate(results):
+            self.assertEqual(r.rank, i + 1)
+
+    def test_anomalous_response_raises(self):
+        with self.assertRaises(MODULE.BackendError):
+            self._call("<html><body><p>blocked</p></body></html>")
+
+
 if __name__ == "__main__":
     unittest.main()
