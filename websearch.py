@@ -276,7 +276,12 @@ def _http_get_with_retry(
     raise BackendError("max retries exceeded")  # unreachable
 
 
-def http_post(url: str, data: dict, timeout: int = REQUEST_TIMEOUT) -> str:
+def http_post(
+    url: str,
+    data: dict,
+    timeout: int = REQUEST_TIMEOUT,
+    extra_headers: Optional[dict] = None,
+) -> str:
     """POST *data* (application/x-www-form-urlencoded) and return response text."""
     encoded = urllib.parse.urlencode(data).encode("utf-8")
     hdrs = {
@@ -285,6 +290,8 @@ def http_post(url: str, data: dict, timeout: int = REQUEST_TIMEOUT) -> str:
         "Accept-Language": "en-US,en;q=0.9",
         "Content-Type": "application/x-www-form-urlencoded",
     }
+    if extra_headers:
+        hdrs.update(extra_headers)
     req = urllib.request.Request(url, data=encoded, headers=hdrs)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # http(s) validé  # nosec B310
@@ -436,26 +443,36 @@ def backend_yahoo(query: str, limit: int) -> list[Result]:
 
 
 _DDG_LITE_URL = "https://lite.duckduckgo.com/lite/"
-_DDG_RESULT_RE = re.compile(
-    r'<a[^>]+class="result-link"[^>]+href="([^"]+)"[^>]*>(.*?)</a>'
-    r'.*?<td[^>]+class="result-snippet"[^>]*>(.*?)</td>',
-    re.S,
-)
+# DDG Lite uses single-quoted class attributes; href order varies — two-pass extraction.
+_DDG_LINK_OPEN_RE = re.compile(r"<a\b[^>]+\bclass=['\"]result-link['\"][^>]*>", re.S)
+_DDG_HREF_RE = re.compile(r'\bhref=["\']([^"\']+)["\']')
+_DDG_SNIPPET_RE = re.compile(r"<td\b[^>]+\bclass=['\"]result-snippet['\"][^>]*>(.*?)</td>", re.S)
+_DDG_POST_HEADERS = {
+    "Origin": "https://lite.duckduckgo.com",
+    "Referer": "https://lite.duckduckgo.com/lite/",
+}
 
 
 def backend_ddg_lite(query: str, limit: int) -> list[Result]:
-    page = http_post(_DDG_LITE_URL, {"q": query, "kl": "en-us"})
+    page = http_post(_DDG_LITE_URL, {"q": query, "kl": "en-us"}, extra_headers=_DDG_POST_HEADERS)
     results: list[Result] = []
-    for m in _DDG_RESULT_RE.finditer(page):
-        url = safe_http_url(htmlmod.unescape(m.group(1).strip()))
-        title = strip_tags(m.group(2))
-        snippet = strip_tags(m.group(3))
+    for m_open in _DDG_LINK_OPEN_RE.finditer(page):
+        m_href = _DDG_HREF_RE.search(m_open.group())
+        if not m_href:
+            continue
+        end_a = page.find("</a>", m_open.end())
+        if end_a < 0:
+            continue
+        title = strip_tags(page[m_open.end():end_a])
+        m_snip = _DDG_SNIPPET_RE.search(page, end_a, end_a + 1500)
+        snippet = strip_tags(m_snip.group(1)) if m_snip else ""
+        url = safe_http_url(htmlmod.unescape(m_href.group(1).strip()))
         if not (url and title):
             continue
         results.append(Result(title=title, url=url, snippet=snippet, rank=len(results) + 1))
         if len(results) >= limit:
             break
-    if not results and "result-link" not in page and len(page) < 10000:
+    if not results and "result-link" not in page:
         raise BackendError("réponse DDG Lite anormale (blocage probable)")
     return results
 
