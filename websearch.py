@@ -1529,14 +1529,14 @@ ul.hres li .mark{display:inline-block;width:1.3em;color:var(--c)}
 </style></head><body>
 <header>
 <div class="row"><h1>__APP__ · <b id="seed">__SEED__</b></h1><span class="badge" id="round"></span><span class="badge" id="status"></span><span class="badge" id="eta"></span>
-<span id="ctl" class="row" style="display:__CTL__"><button onclick="api('/api/round')" data-ui="btn_round">round maintenant</button><button id="pause" onclick="api('/api/pause')">pause</button>
-<input id="newseed" placeholder="nouvelle graine…" onkeydown="if(event.key==='Enter'){api('/api/seed',{seed:this.value});this.value=''}"></span>
-<div id="nav" class="row"><button data-view="tree" onclick="setView('tree')">&#9652; <span data-ui="btn_tree">arbre</span></button><button data-view="history" onclick="setView('history')">&#9776; <span data-ui="btn_history">historique complet</span></button></div>
-<button onclick="toggleAll(true)" data-ui="btn_expand">tout déplier</button><button onclick="toggleAll(false)" data-ui="btn_collapse">tout replier</button><span class="hint" id="gen"></span></div>
-<div class="row"><span class="hint" data-ui="lbl_history">historique :</span><button id="back" onclick="api('/api/back')" style="display:__CTL__">&#8592; <span data-ui="btn_back">retour</span></button><span id="crumbs"></span><button id="fwd" onclick="api('/api/forward')" style="display:__CTL__"><span data-ui="btn_fwd">avant</span> &#8594;</button>
+<span id="ctl" class="row" style="display:__CTL__"><button data-action="round" data-ui="btn_round">round maintenant</button><button id="pause" data-action="pause">pause</button>
+<input id="newseed" placeholder="nouvelle graine…"></span>
+<div id="nav" class="row"><button data-view="tree" data-action="view-tree">&#9652; <span data-ui="btn_tree">arbre</span></button><button data-view="history" data-action="view-history">&#9776; <span data-ui="btn_history">historique complet</span></button></div>
+<button data-action="expand-all" data-ui="btn_expand">tout déplier</button><button data-action="collapse-all" data-ui="btn_collapse">tout replier</button><span class="hint" id="gen"></span></div>
+<div class="row"><span class="hint" data-ui="lbl_history">historique :</span><button id="back" data-action="back" style="display:__CTL__">&#8592; <span data-ui="btn_back">retour</span></button><span id="crumbs"></span><button id="fwd" data-action="forward" style="display:__CTL__"><span data-ui="btn_fwd">avant</span> &#8594;</button>
 <span class="hint">· <span data-ui="hint_actions">clic carte = déplier/replier · clic feuille = ouvrir + signaler consulté · Maj+clic = pivoter</span></span></div>
 <div class="row" id="trrow" style="display:__CTL__"><span class="hint" data-ui="lbl_translate">traduction (LLM) :</span>
-<select id="trlang" onchange="api('/api/translate',{lang:this.value})">
+<select id="trlang">
 <option value="" data-ui="opt_original">Original</option>
 <option value="fr">FR · Français</option>
 <option value="en">EN · English</option>
@@ -1546,10 +1546,10 @@ ul.hres li .mark{display:inline-block;width:1.3em;color:var(--c)}
 <option value="ru">RU · Русский</option>
 </select><span class="hint" id="trstatus"></span></div>
 </header>
-<div id="wrap"><div id="canvas"><svg id="edges" xmlns="http://www.w3.org/2000/svg"></svg><div id="nodes"></div></div></div>
+<div id="wrap"><div id="canvas"><svg id="edges" xmlns="http://www.w3.org/2000/svg"></svg><div id="nodes" role="tree" aria-label="résultats de recherche"></div></div></div>
 <div id="histview" style="display:none"></div>
 <div id="side"><div><b data-ui="lbl_lexical">champ lexical :</b> <span id="lex"></span></div><div><b data-ui="lbl_viewed">consultés :</b> <span id="viewed"></span></div><div id="log"></div></div>
-<script>
+<script nonce="__NONCE__">
 const LIVE=__LIVE__;let STATE=__STATE__;let lastVersion=-1;const open_=new Map();let touchedGen="";
 const ICON={round:"\u25A3",col1:"\u25B8",col2:"\u25B9",seen:"\u2713",unseen:"\u00B7",
  method:{seed:"\u25C6",definition:"?",practical:"\u2699",comparison:"\u21C4",recent:"\u21BB",technical:"\u00A7",
@@ -1624,9 +1624,9 @@ function drawTree(st){
   edges+=bez(cx,seedY+34,gx1,groupY,"#4c8dff",2)+bez(cx,seedY+34,gx2,groupY,"#4c8dff",2);
   const side=(lay,gx,col)=>{for(const p of lay.placed){const t=p.t,fresh=t.round===st.round?" fresh":"";
     edges+=bez(gx,groupY+28,p.x+CW/2,p.y,t.color,1.2).replace('stroke-opacity=".7"','stroke-opacity=".45"');
-    nodes+=`<div class="node card${fresh}" data-id="${t.id}" data-col="${col}" style="--c:${t.color};left:${p.x}px;top:${p.y}px;width:${CW}px;height:${CH}px" title="${esc(U("lbl_round"))} ${t.round} · ${esc(M(t.method))}&#10;${esc(t.query)}">
+    nodes+=`<div class="node card${fresh}" data-id="${t.id}" data-col="${col}" style="--c:${t.color};left:${p.x}px;top:${p.y}px;width:${CW}px;height:${CH}px" title="${esc(U("lbl_round"))} ${t.round} · ${esc(M(t.method))}&#10;${esc(t.query)}" tabindex="0" role="treeitem" aria-expanded="${p.open}" aria-label="${esc(t.query)}">
       <div class="q">${esc(t.query)}</div><div class="m"><span>r${t.round} · ${esc(M(t.method))} ${p.open?"▾":"▸"}</span><span class="n">${t.results.length}</span></div></div>`;
-    if(p.open)t.results.forEach((r,i)=>{nodes+=`<div class="leaf${r.viewed?" viewed":""}" data-url="${esc(r.url)}" style="--c:${t.color};left:${p.x+6}px;top:${p.y+CH+6+i*LH}px;width:${CW-10}px;height:${LH}px" title="${esc(r.title)}\n${esc(r.url)}\n${esc(r.snippet)}\n[${esc(r.backend)}]">${esc(r.title)}</div>`;});}};
+    if(p.open)t.results.forEach((r,i)=>{nodes+=`<div class="leaf${r.viewed?" viewed":""}" data-url="${esc(r.url)}" style="--c:${t.color};left:${p.x+6}px;top:${p.y+CH+6+i*LH}px;width:${CW-10}px;height:${LH}px" title="${esc(r.title)}\n${esc(r.url)}\n${esc(r.snippet)}\n[${esc(r.backend)}]" tabindex="0" role="treeitem" aria-label="${esc(r.title)}">${esc(r.title)}</div>`;});}};
   side(L,gx1,"1");side(R,gx2,"2");
   const cv=document.getElementById("canvas");cv.style.width=W+"px";cv.style.height=H+"px";
   const sv=document.getElementById("edges");sv.setAttribute("width",W);sv.setAttribute("height",H);sv.innerHTML=edges;document.getElementById("nodes").innerHTML=nodes;
@@ -1650,15 +1650,19 @@ function draw(st){
   if(trsel)trsel.disabled=!!st.translate_status;
   document.getElementById("trstatus").textContent=st.translate_status||(st.translate_lang?U("tr_done",{lang:st.languages[st.translate_lang]||st.translate_lang}):"");
 }
-async function poll(force){if(!LIVE)return;try{const r=await fetch("/state.json",{cache:"no-store"});const st=await r.json();if(force||st.version!==lastVersion||st.next_round_in!==STATE.next_round_in){lastVersion=st.version;STATE=st;draw(st);}}catch(e){document.getElementById("status").textContent=U("unreachable");}}
+let lastEtag="";let errBanner=null;function getOrCreateBanner(){if(!errBanner){errBanner=document.createElement("div");errBanner.id="errbanner";errBanner.style.cssText="display:none;position:fixed;top:0;left:0;right:0;background:#c0392b;color:#fff;padding:6px 12px;font-size:13px;z-index:9999;text-align:center;";document.body.prepend(errBanner);}return errBanner;}function showError(msg){const b=getOrCreateBanner();b.textContent=msg;b.style.display="block";}function clearError(){if(errBanner)errBanner.style.display="none";}async function poll(force){if(!LIVE)return;try{const hdrs={"Cache-Control":"no-cache"};if(lastEtag&&!force)hdrs["If-None-Match"]=lastEtag;const r=await fetch("/state.json",{headers:hdrs});if(r.status===304){clearError();return;}if(!r.ok){showError(U("unreachable")+" (HTTP "+r.status+")");return;}const et=r.headers.get("ETag")||"";const st=await r.json();if(force||st.version!==lastVersion||st.next_round_in!==STATE.next_round_in){lastVersion=st.version;STATE=st;lastEtag=et;draw(st);}clearError();}catch(e){showError(U("unreachable"));}}
+document.addEventListener("click",ev=>{const b=ev.target.closest("[data-action]");if(!b)return;const a=b.dataset.action;if(a==="round")api('/api/round');else if(a==="pause")api('/api/pause');else if(a==="back")api('/api/back');else if(a==="forward")api('/api/forward');else if(a==="expand-all")toggleAll(true);else if(a==="collapse-all")toggleAll(false);else if(a==="view-tree")setView('tree');else if(a==="view-history")setView('history');});
+document.getElementById("newseed").addEventListener("keydown",ev=>{if(ev.key==="Enter"){api('/api/seed',{seed:ev.target.value});ev.target.value="";}});
+document.getElementById("trlang").addEventListener("change",ev=>{api('/api/translate',{lang:ev.target.value});});
+document.getElementById("nodes").addEventListener("keydown",ev=>{const el=ev.target;const isCard=el.classList.contains("card");const isLeaf=el.classList.contains("leaf");if(!isCard&&!isLeaf)return;if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();if(isLeaf)leafClick(ev,el.dataset.url);else el.click();}else if(ev.key==="ArrowDown"||ev.key==="ArrowUp"){ev.preventDefault();const items=Array.from(document.querySelectorAll("#nodes [tabindex='0']"));const idx=items.indexOf(el);const next=items[ev.key==="ArrowDown"?idx+1:idx-1];if(next)next.focus();}else if((ev.key==="ArrowRight"||ev.key==="ArrowLeft")&&isCard){ev.preventDefault();const col=el.dataset.col;const tid=el.dataset.id;if(col&&tid){const t=STATE.columns[col].find(x=>String(x.id)===tid);if(t){const want=ev.key==="ArrowRight";if(isOpen(STATE,t)!==want){open_.set(STATE.seed+"#"+tid,want);draw(STATE);}}}}});
 draw(STATE);if(LIVE){poll(true);setInterval(poll,2000);}window.addEventListener("resize",()=>draw(STATE));
 </script></body></html>"""
 
 
-_TEMPLATE_TOKEN_RE = re.compile(r"__(LANG|APP|VERSION|SEED|STATE|LIVE|CTL)__")
+_TEMPLATE_TOKEN_RE = re.compile(r"__(LANG|APP|VERSION|SEED|STATE|LIVE|CTL|NONCE)__")
 
 
-def render_html(state: dict, live: bool) -> str:
+def render_html(state: dict, live: bool, nonce: str = "static") -> str:
     """Substitution en une seule passe : une graine contenant « __STATE__ » ou un autre
     marqueur ne peut pas déclencher une seconde substitution."""
     lang = state.get("html_lang") or UI_SOURCE_LANG
@@ -1672,6 +1676,7 @@ def render_html(state: dict, live: bool) -> str:
         "STATE": json.dumps(state, ensure_ascii=False).replace("</", "<\\/").replace("<!--", "<\\!--"),
         "LIVE": "true" if live else "false",
         "CTL": "flex" if live else "none",
+        "NONCE": nonce,
     }
     return _TEMPLATE_TOKEN_RE.sub(lambda m: values[m.group(1)], HTML_TEMPLATE)
 
@@ -1755,11 +1760,12 @@ def _run_translation(session: Session, lang: str) -> None:
     session.note(f"traduction -> {lang_name} terminée")
 
 
-CONTENT_SECURITY_POLICY = (
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+_CSP_TEMPLATE = (
+    "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; "
     "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; "
     "frame-ancestors 'none'"
 )
+CONTENT_SECURITY_POLICY = _CSP_TEMPLATE.format(nonce="static")  # fallback sans nonce
 
 
 def _host_for_url(host: str) -> str:
@@ -1797,15 +1803,19 @@ class WebServer:
             def log_message(self, fmt: str, *args: object) -> None:  # noqa: A003
                 log.debug("web %s", fmt % args)
 
-            def _send(self, code: int, body: bytes, ctype: str) -> None:
+            def _send(self, code: int, body: bytes, ctype: str,
+                      etag: Optional[str] = None, csp: Optional[str] = None) -> None:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
+                cache = "no-store" if etag is None else "no-cache"
+                self.send_header("Cache-Control", cache)
+                if etag:
+                    self.send_header("ETag", etag)
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("X-Frame-Options", "DENY")
-                self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+                self.send_header("Content-Security-Policy", csp or CONTENT_SECURITY_POLICY)
                 self.send_header("Cross-Origin-Opener-Policy", "same-origin")
                 self.send_header("Cross-Origin-Resource-Policy", "same-origin")
                 self.end_headers()
@@ -1834,9 +1844,19 @@ class WebServer:
                     return
                 path = urllib.parse.urlsplit(self.path).path
                 if path == "/":
-                    self._send(200, render_html(outer.session.snapshot(), live=True).encode("utf-8"), "text/html; charset=utf-8")
+                    nonce = os.urandom(16).hex()
+                    csp = _CSP_TEMPLATE.format(nonce=nonce)
+                    self._send(200, render_html(outer.session.snapshot(), live=True, nonce=nonce).encode("utf-8"), "text/html; charset=utf-8", csp=csp)
                 elif path == "/state.json":
-                    self._send(200, json.dumps(outer.session.snapshot(), ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+                    body = json.dumps(outer.session.snapshot(), ensure_ascii=False).encode("utf-8")
+                    etag = f'"{outer.session.version}"'
+                    if self.headers.get("If-None-Match") == etag:
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.send_header("Cache-Control", "no-cache")
+                        self.end_headers()
+                    else:
+                        self._send(200, body, "application/json; charset=utf-8", etag=etag)
                 else:
                     self._send(404, b"not found", "text/plain")
 
