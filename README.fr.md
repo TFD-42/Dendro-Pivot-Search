@@ -141,6 +141,18 @@ git clone https://github.com/TFD-42/dendropivot-search.git
 cd dendropivot-search
 ```
 
+### Paquets de release prêts à l'emploi
+
+Pas de `git` sous la main, ou besoin des dépendances préparées en une étape ? Chaque [release](https://github.com/TFD-42/dendropivot-search/releases/latest) propose trois zips prêts à l'emploi — mêmes sources Python, aucun binaire compilé, juste un script d'installation adapté à la plateforme en plus :
+
+| Paquet | Contient | Lancement |
+|---|---|---|
+| `dendropivot-<version>-windows.zip` | `websearch.py`, `launcher.py`, `run.bat`, `setup.ps1` | `setup.ps1` puis `run.bat` |
+| `dendropivot-<version>-macos.zip` | `websearch.py`, `launcher.py`, `run.sh`, `setup.sh` | `./setup.sh` puis `./run.sh` |
+| `dendropivot-<version>-unix.zip` | `websearch.py`, `launcher.py`, `run.sh`, `setup.sh` | `./setup.sh` puis `./run.sh` |
+
+Décompressez, puis lancez le script d'installation une fois : il vérifie Python 3.10+, installe/démarre Ollama s'il n'est pas déjà présent, et ne télécharge un modèle **que si aucun n'est installé** (même logique sans défaut imposé que le [lanceur](#lanceur) — sûr à relancer, et la recherche fonctionne aussi sans Ollama grâce à l'expansion heuristique intégrée). Les zips macOS et Unix/Linux sont identiques : `setup.sh` détecte l'OS (Termux compris) à l'exécution.
+
 ## Lanceur
 
 ```bash

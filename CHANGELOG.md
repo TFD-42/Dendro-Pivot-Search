@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - README screenshot of the language selector (`docs/dendropivot-language-selector.png`, metadata-free).
+- Release assets for v1.1.0: `dendropivot-v1.1.0-windows.zip`, `-macos.zip`, `-unix.zip` — each bundles `websearch.py`, `launcher.py`, the matching runner (`run.bat`/`run.sh`) and a `setup.ps1`/`setup.sh` script that checks Python 3.10+, then runs `launcher.py --install --yes` (installs/verifies Ollama, starts its server, pulls a model only if none is present — safe to re-run).
 
 ## [1.1.0] - 2026-09-28
 
