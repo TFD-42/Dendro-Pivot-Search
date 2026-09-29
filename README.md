@@ -1,6 +1,6 @@
 <div align="center">
 
-# DendroPivot
+# Dendro-Pivot
 
 ### Privacy-first local web search explorer for Python — expand one query into a navigable knowledge tree
 
