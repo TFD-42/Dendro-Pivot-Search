@@ -1595,6 +1595,7 @@ ul.hres li .mark{display:inline-block;width:1.3em;color:var(--c)}
 #side{padding:6px 14px 20px;color:var(--mut);font-size:12px}#side b{color:var(--fg)}
 #log{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:11px;max-height:140px;overflow:auto;border-top:1px solid var(--line);margin-top:8px;padding-top:6px}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/three-spritetext" nonce="__NONCE__"></script>
 <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1" nonce="__NONCE__"></script>
 </head><body>
 <header>
@@ -1678,48 +1679,76 @@ function renderHistory(st){
 let _graph=null,_graphSeed=null;
 function buildGraph(st){
   const nodes=[],links=[];
-  nodes.push({id:"seed",label:st.seed,ntype:"seed",color:"#4c8dff",val:10});
+  nodes.push({id:"seed",label:st.seed,ntype:"seed",color:"#4c8dff",val:14});
   for(const col of["1","2"]){
-    const gid="g"+col,gcol=col==="1"?"#5b8dd9":"#9b59b6";
-    nodes.push({id:gid,label:"Col "+col+" · "+(col==="1"?U("col_focus"):U("col_adjacent")),ntype:"group",color:gcol,val:6});
+    const gid="g"+col;
+    const gcol=col==="1"?"#5b8dd9":"#a06cd5";
+    const colTopics=st.columns[col]||[];
+    const totalR=colTopics.reduce((a,t)=>a+t.results.length,0);
+    const glabel=(col==="1"?"▸ Focus":"▹ "+U("col_adjacent"))+"\n"+colTopics.length+" req · "+totalR+" rés";
+    nodes.push({id:gid,label:glabel,ntype:"group",color:gcol,val:8});
     links.push({source:"seed",target:gid,color:"#4c8dff"});
-    for(const t of(st.columns[col]||[])){
-      const tid="topic-"+t.id;
-      nodes.push({id:tid,label:t.query,ntype:"topic",color:t.color,val:4,topic:t,col});
+    for(const t of colTopics){
+      const tid="t"+t.id;
+      const tlabel=t.query+"\n"+t.results.length+" rés · r"+t.round+" · "+M(t.method);
+      nodes.push({id:tid,label:tlabel,ntype:"topic",color:t.color,val:5,topic:t,col});
       links.push({source:gid,target:tid,color:t.color});
-      for(const r of t.results){
-        const rid="res-"+encodeURIComponent(r.url).slice(0,60);
-        nodes.push({id:rid,label:r.title,ntype:"result",color:r.viewed?"#8b93a5":t.color,val:r.viewed?1:2,url:r.url,viewed:r.viewed});
+      for(let i=0;i<t.results.length;i++){
+        const r=t.results[i];
+        const rid="r"+t.id+"_"+i;
+        const rlabel=r.title+(r.snippet?"\n"+r.snippet.slice(0,60)+"…":"")+"\n["+r.backend+"]";
+        nodes.push({id:rid,label:rlabel,ntype:"result",color:r.viewed?"#6b7385":t.color,val:r.viewed?1.5:2.5,url:r.url,viewed:r.viewed});
         links.push({source:tid,target:rid,color:t.color});
       }
     }
   }
   return{nodes,links};
 }
+function makeSprite(n){
+  if(!window.SpriteText)return null;
+  const s=new SpriteText(n.label||"");
+  const sz={seed:8,group:6,topic:4.5,result:3}[n.ntype]||3;
+  s.textHeight=sz;
+  s.color=n.color||"#e6e9ef";
+  s.backgroundColor=n.ntype==="seed"?"#1a2a5a99":n.ntype==="group"?"#1a153099":n.ntype==="topic"?"#16182899":"";
+  s.padding=2;
+  s.borderRadius=3;
+  s.fontFace="system-ui,-apple-system,sans-serif";
+  return s;
+}
 function initGraph(st){
-  if(!window.ForceGraph3D)return;
+  if(!window.ForceGraph3D||!window.SpriteText)return;
   const el=document.getElementById("graph3d");
-  const gdata=buildGraph(st);
   const W=el.clientWidth||window.innerWidth,H=el.clientHeight||(window.innerHeight-120);
-  if(!_graph||_graphSeed!==st.seed){
-    el.innerHTML="";
-    _graph=ForceGraph3D()(el)
-      .width(W).height(H)
-      .backgroundColor("#0f1218")
-      .nodeLabel("label")
-      .nodeColor(n=>n.color||"#8b93a5")
-      .nodeVal(n=>n.val||2)
-      .nodeOpacity(0.9)
-      .linkColor(l=>(l.color||"#2a3140")+"99")
-      .linkWidth(0.5)
-      .enableNodeDrag(true)
-      .onNodeClick(n=>{
-        if(n.url){api("/api/viewed",{url:n.url});window.open(n.url,"_blank","noopener");}
-        else if(n.topic){const t=n.topic;const k=st.seed+"#"+t.id;open_.set(k,!open_.get(k));draw(STATE);}
-      });
-    _graphSeed=st.seed;
-  }
+  const gdata=buildGraph(st);
+  if(_graph&&_graphSeed===st.seed){_graph.graphData(gdata);return;}
+  el.innerHTML="";
+  _graph=ForceGraph3D()(el)
+    .width(W).height(H)
+    .backgroundColor("#0f1218")
+    .dagMode("radialout")
+    .dagLevelDistance(130)
+    .nodeThreeObject(makeSprite)
+    .nodeThreeObjectExtend(false)
+    .nodeColor(n=>n.color||"#8b93a5")
+    .nodeVal(n=>n.val||2)
+    .nodeOpacity(0.92)
+    .linkColor(l=>l.color||"#2a3140")
+    .linkOpacity(0.35)
+    .linkWidth(0.7)
+    .linkDirectionalArrowLength(5)
+    .linkDirectionalArrowRelPos(1)
+    .linkDirectionalParticles(1)
+    .linkDirectionalParticleColor(l=>l.color||"#4c8dff")
+    .linkDirectionalParticleSpeed(0.005)
+    .enableNodeDrag(true)
+    .onNodeHover(n=>{el.style.cursor=n&&(n.url||n.topic)?"pointer":"default";})
+    .onNodeClick(n=>{
+      if(n.url){api("/api/viewed",{url:n.url});window.open(n.url,"_blank","noopener");}
+      else if(n.topic){const t=n.topic;const k=st.seed+"#"+t.id;open_.set(k,!isOpen(st,t));draw(STATE);}
+    });
   _graph.graphData(gdata);
+  _graphSeed=st.seed;
 }
 function draw(st){
   const view=currentView();
