@@ -23,7 +23,7 @@ DendroPivot turns a single search into a guided exploration path. Every round, y
 [![GitHub issues](https://img.shields.io/github/issues/TFD-42/dendropivot-search)](https://github.com/TFD-42/dendropivot-search/issues)
 [![GitHub stars](https://img.shields.io/github/stars/TFD-42/dendropivot-search?style=social)](https://github.com/TFD-42/dendropivot-search/stargazers)
 
-[English](README.md) · [Français](README.fr.md)
+[English](README.md) · [Français](readme/README.fr.md) · [Deutsch](readme/README.de.md) · [Español](readme/README.es.md) · [Italiano](readme/README.it.md) · [Русский](readme/README.ru.md) · [中文](readme/README.zh.md) · [日本語](readme/README.ja.md) · [Português](readme/README.pt.md)
 
 </div>
 
