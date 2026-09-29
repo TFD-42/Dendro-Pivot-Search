@@ -10,6 +10,25 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = []
+keywords = [
+  "search", "web-search", "local-search", "knowledge-tree",
+  "privacy", "ollama", "cli", "research-tool", "exploratory-search",
+  "no-api-key", "query-expansion", "self-hosted",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
 
 [project.scripts]
 dendropivot = "websearch:main"

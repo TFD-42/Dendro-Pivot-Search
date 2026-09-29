@@ -1,24 +1,24 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it using these metadata."
-title: "DendroPivot"
-abstract: "Innovative methodology to learn deeper by pivoting from an initial query: a two-column, continuously enriching web search explorer for the terminal and a local web view, with multi-backend fallback and optional Ollama query expansion. Python standard library only."
+message: "If you use DendroPivot in research or write about it, please cite:"
 type: software
-authors:
-  - alias: "TFD-42"
+title: DendroPivot
+abstract: >
+  Privacy-first local web search explorer for Python. Grows a navigable
+  knowledge tree from one query using multi-backend search and optional
+  local Ollama LLM expansion. No API key required. Python standard library only.
+url: https://github.com/TFD-42/dendropivot-search
+repository-code: https://github.com/TFD-42/dendropivot-search
 version: "1.1.0"
 date-released: "2026-09-28"
 license: MIT
-repository-code: "https://github.com/TFD-42/dendropivot-search"
 keywords:
+  - local web search
   - knowledge tree
-  - learning
-  - research tool
-  - web search
-  - search engine
-  - cli
-  - tui
+  - exploratory search
+  - privacy-first
   - ollama
-  - llm
-  - query expansion
-  - termux
   - python
+  - no api key
+  - query expansion
+  - research tool
+  - self-hosted
